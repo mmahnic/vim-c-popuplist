@@ -1,8 +1,27 @@
-Index: vim7/src/if_python.c
+Index: if_python.c
 ===================================================================
---- vim7/src/if_python.c	(revision 1493)
-+++ vim7/src/if_python.c	(working copy)
-@@ -2234,6 +2234,104 @@
+--- if_python.c	(revision 1626)
++++ if_python.c	(working copy)
+@@ -2031,10 +2031,16 @@
+     }
+     else if (strcmp(name, "height") == 0)
+ 	return Py_BuildValue("l", (long)(this->win->w_height));
+-#ifdef FEAT_VERTSPLIT
+     else if (strcmp(name, "width") == 0)
+ 	return Py_BuildValue("l", (long)(W_WIDTH(this->win)));
+-#endif
++#ifdef FEAT_PYTHON_SCREEN
++    else if (strcmp(name, "top") == 0)
++	return Py_BuildValue("l", (long)(W_WINROW(this->win)));
++    else if (strcmp(name, "left") == 0)
++	return Py_BuildValue("l", (long)(W_WINCOL(this->win)));
++    else if (strcmp(name, "wcursor") == 0)
++	return Py_BuildValue("(ll)", (long)(this->win->w_wrow), (long)(this->win->w_wcol));
++#endif // FEAT_PYTHON_SCREEN
+     else if (strcmp(name,"__members__") == 0)
+ 	return Py_BuildValue("[sss]", "buffer", "cursor", "height");
+     else
+@@ -2234,6 +2240,106 @@
      return NULL;
  }
  
@@ -10,6 +29,7 @@ Index: vim7/src/if_python.c
 +/* Screen object - Definitions
 + */
 +
++#ifdef FEAT_PYTHON_SCREEN
 +typedef struct
 +{
 +    PyObject_HEAD
@@ -103,27 +123,108 @@ Index: vim7/src/if_python.c
 +
 +    return Py_BuildValue("l", (long)attr);
 +}
++#endif // FEAT_PYTHON_SCREEN
 +
  /* Current items object - Definitions
   */
  
-@@ -2342,6 +2440,11 @@
+@@ -2342,6 +2448,13 @@
      PyObject_HEAD_INIT(&WinListType)
  };
  
++#ifdef FEAT_PYTHON_SCREEN
 +static ScreenObject TheScreen =
 +{
 +    PyObject_HEAD_INIT(&ScreenType)
 +};
++#endif // FEAT_PYTHON_SCREEN
 +
  static CurrentObject TheCurrent =
  {
      PyObject_HEAD_INIT(&CurrentType)
-@@ -2375,6 +2478,7 @@
+@@ -2362,6 +2475,9 @@
+     BufListType.ob_type = &PyType_Type;
+     WinListType.ob_type = &PyType_Type;
+     CurrentType.ob_type = &PyType_Type;
++#ifdef FEAT_PYTHON_SCREEN
++    ScreenType.ob_type = &PyType_Type;
++#endif // FEAT_PYTHON_SCREEN
+ 
+     /* Set sys.argv[] to avoid a crash in warn(). */
+     PySys_SetArgv(1, argv);
+@@ -2375,6 +2491,9 @@
      PyDict_SetItemString(dict, "buffers", (PyObject *)(void *)&TheBufferList);
      PyDict_SetItemString(dict, "current", (PyObject *)(void *)&TheCurrent);
      PyDict_SetItemString(dict, "windows", (PyObject *)(void *)&TheWindowList);
++#ifdef FEAT_PYTHON_SCREEN
 +    PyDict_SetItemString(dict, "screen", (PyObject *)(void *)&TheScreen);
++#endif // FEAT_PYTHON_SCREEN
  
      if (PyErr_Occurred())
  	return -1;
+Index: eval.c
+===================================================================
+--- eval.c	(revision 1626)
++++ eval.c	(working copy)
+@@ -11691,6 +11691,9 @@
+ 	"python",
+ #endif
+ #endif
++#ifdef FEAT_PYTHON_SCREEN
++	"python_screen",
++#endif
+ #ifdef FEAT_POSTSCRIPT
+ 	"postscript",
+ #endif
+Index: version.c
+===================================================================
+--- version.c	(revision 1626)
++++ version.c	(working copy)
+@@ -450,6 +450,11 @@
+ #else
+ 	"-python",
+ #endif
++#ifdef FEAT_PYTHON_SCREEN
++	"+python_screen",
++#else
++	"-python_screen",
++#endif
+ #ifdef FEAT_QUICKFIX
+ 	"+quickfix",
+ #else
+Index: configure.in
+===================================================================
+--- configure.in	(revision 1626)
++++ configure.in	(working copy)
+@@ -817,6 +817,17 @@
+ AC_SUBST(PYTHON_SRC)
+ AC_SUBST(PYTHON_OBJ)
+ 
++AC_MSG_CHECKING(--enable-pythonscreen argument)
++AC_ARG_ENABLE(pythonscreen,
++	[  --enable-pythonscreen   Include Python Screen Access.], ,
++	[enable_pythonscreen="no"])
++AC_MSG_RESULT($enable_pythonscreen)
++if test "$enable_pythonscreen" = "yes"; then
++  if test $python_ok = yes; then
++    AC_DEFINE(FEAT_PYTHON_SCREEN)
++  fi
++fi
++
+ AC_MSG_CHECKING(--enable-tclinterp argument)
+ AC_ARG_ENABLE(tclinterp,
+ 	[  --enable-tclinterp      Include Tcl interpreter.], ,
+Index: config.h.in
+===================================================================
+--- config.h.in	(revision 1626)
++++ config.h.in	(working copy)
+@@ -302,6 +302,9 @@
+ /* Define if you want to include the Python interpreter. */
+ #undef FEAT_PYTHON
+ 
++/* Define if you want to include the Python interpreter Screen access. */
++#undef FEAT_PYTHON_SCREEN
++
+ /* Define if you want to include the Ruby interpreter. */
+ #undef FEAT_RUBY
+ 
