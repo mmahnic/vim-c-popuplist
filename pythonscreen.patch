@@ -1,8 +1,8 @@
 Index: if_python.c
 ===================================================================
---- if_python.c	(revision 1626)
+--- if_python.c	(revision 1830)
 +++ if_python.c	(working copy)
-@@ -2031,10 +2031,16 @@
+@@ -2037,10 +2037,16 @@
      }
      else if (strcmp(name, "height") == 0)
  	return Py_BuildValue("l", (long)(this->win->w_height));
@@ -21,7 +21,7 @@ Index: if_python.c
      else if (strcmp(name,"__members__") == 0)
  	return Py_BuildValue("[sss]", "buffer", "cursor", "height");
      else
-@@ -2234,6 +2240,106 @@
+@@ -2247,6 +2253,106 @@
      return NULL;
  }
  
@@ -128,7 +128,7 @@ Index: if_python.c
  /* Current items object - Definitions
   */
  
-@@ -2342,6 +2448,13 @@
+@@ -2355,6 +2461,13 @@
      PyObject_HEAD_INIT(&WinListType)
  };
  
@@ -142,7 +142,7 @@ Index: if_python.c
  static CurrentObject TheCurrent =
  {
      PyObject_HEAD_INIT(&CurrentType)
-@@ -2362,6 +2475,9 @@
+@@ -2375,6 +2488,9 @@
      BufListType.ob_type = &PyType_Type;
      WinListType.ob_type = &PyType_Type;
      CurrentType.ob_type = &PyType_Type;
@@ -152,7 +152,7 @@ Index: if_python.c
  
      /* Set sys.argv[] to avoid a crash in warn(). */
      PySys_SetArgv(1, argv);
-@@ -2375,6 +2491,9 @@
+@@ -2388,6 +2504,9 @@
      PyDict_SetItemString(dict, "buffers", (PyObject *)(void *)&TheBufferList);
      PyDict_SetItemString(dict, "current", (PyObject *)(void *)&TheCurrent);
      PyDict_SetItemString(dict, "windows", (PyObject *)(void *)&TheWindowList);
@@ -164,9 +164,9 @@ Index: if_python.c
  	return -1;
 Index: eval.c
 ===================================================================
---- eval.c	(revision 1626)
+--- eval.c	(revision 1830)
 +++ eval.c	(working copy)
-@@ -11691,6 +11691,9 @@
+@@ -11706,6 +11706,9 @@
  	"python",
  #endif
  #endif
@@ -178,7 +178,7 @@ Index: eval.c
  #endif
 Index: version.c
 ===================================================================
---- version.c	(revision 1626)
+--- version.c	(revision 1830)
 +++ version.c	(working copy)
 @@ -450,6 +450,11 @@
  #else
@@ -194,9 +194,9 @@ Index: version.c
  #else
 Index: configure.in
 ===================================================================
---- configure.in	(revision 1626)
+--- configure.in	(revision 1830)
 +++ configure.in	(working copy)
-@@ -817,6 +817,17 @@
+@@ -833,6 +833,17 @@
  AC_SUBST(PYTHON_SRC)
  AC_SUBST(PYTHON_OBJ)
  
@@ -216,7 +216,7 @@ Index: configure.in
  	[  --enable-tclinterp      Include Tcl interpreter.], ,
 Index: config.h.in
 ===================================================================
---- config.h.in	(revision 1626)
+--- config.h.in	(revision 1830)
 +++ config.h.in	(working copy)
 @@ -302,6 +302,9 @@
  /* Define if you want to include the Python interpreter. */

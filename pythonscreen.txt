@@ -1,28 +1,71 @@
 Installing the vim patch:
 
 Linux:
-   1. download the source code of vim; see vim page
-   2. copy pythonscreen.patch into vim/src
-   3. open bash and cd into vim/src, then
 
-      patch < pythonscreen.patch
+   * Copy the file pythonscreen.patch into the directory vim/src
 
-   4. build vim
-      the following commands may help:
-   
-      export CONF_OPT_PYTHON='--enable-pythoninterp --enable-pythonscreen'
-      export CONF_OPT_GUI='--enable-gnome-check'
-      export CONF_OPT_PERL='--enable-perlinterp'
-      export CONF_OPT_TCL='--enable-tclinterp --with-tcl=tclsh8.4'
-      export CONF_OPT_RUBY='--enable-rubyinterp'
-      export CONF_OPT_MZSCHEME='--disable-mzschemeinterp'
-      export CONF_OPT_CSCOPE='--enable-cscope'
-      export CONF_OPT_MULTIBYTE='--enable-multibyte'
-      export CONF_OPT_FEAT='--with-features=huge'
-      export CONF_OPT_COMPBY='"--with-compiledby=Me"'
-      export CONF_ARGS='--prefix=/usr'
-      export CONF_ARGS="$CONF_ARGS "'--with-vim-name=vim.gnome --with-modified-by="Patch"'
+   * Apply the patch:
 
-      make reconfig
+        cd vim/src
+        patch < pythonscreen.patch
 
-   5. if all went well, vim.gnome was created
+   * Update configure script
+
+        make autoconf
+
+     This step will create a new auto/configure script. Check the warnings
+     in Makefile comments.
+
+   * Configure Vim for building:
+
+        # Example bash script. Notice --enable-pythonscreen option.
+        export CONF_OPT_PYTHON='--enable-pythoninterp --enable-pythonscreen'
+        export CONF_OPT_GUI='--enable-gnome-check'
+        export CONF_OPT_PERL='--enable-perlinterp'
+        export CONF_OPT_TCL='--enable-tclinterp --with-tcl=tclsh8.4'
+        export CONF_OPT_RUBY='--enable-rubyinterp'
+        export CONF_OPT_MZSCHEME='--disable-mzschemeinterp'
+        export CONF_OPT_CSCOPE='--enable-cscope'
+        export CONF_OPT_MULTIBYTE='--enable-multibyte'
+        export CONF_OPT_FEAT='--with-features=huge'
+        export CONF_OPT_COMPBY='"--with-compiledby=Me"'
+        export CONF_ARGS='--prefix=/usr'
+        export CONF_ARGS="$CONF_ARGS "'--with-vim-name=vim.gnome --with-modified-by="Me"'
+
+   * Build Vim:
+
+        make reconfig
+
+If all went well, `vim.gnome` was created in the directory `vim/src`.
+
+Windows:
+
+   * Copy the file pythonscreen.patch into the directory vim\src
+
+   * Apply the patch:
+
+        cd vim\src
+        patch < pythonscreen.patch
+
+     The following links may be useful (you may need to convert EOLs in all vim files and
+     the patch to CR-LF with unix2dos):
+     http://gnuwin32.sourceforge.net/packages/patch.htm
+     http://gnuwin32.sourceforge.net/packages/cygutils.htm
+
+   * Build vim
+
+       GUI version (all on one line):
+
+         nmake -f Make_mvc.mak FEATURES=HUGE GUI=yes
+             PYTHON=c:\python26 DYNAMIC_PYTHON=yes PYTHON_VER=26
+             IME=yes CSCOPE=yes "DEFINES=-DFEAT_PYTHON_SCREEN"
+
+       Console version (all on one line):
+
+         nmake -f Make_mvc.mak FEATURES=HUGE GUI=no
+             PYTHON=c:\python26 DYNAMIC_PYTHON=yes PYTHON_VER=26
+             IME=yes CSCOPE=yes "DEFINES=-DFEAT_PYTHON_SCREEN"
+
+       Make sure there is the correct path in PYTHON and the correct version in PYTHON_VER.
+       You may have to run 'nmake -f Make_mvc.mak clean' between the above builds.
+
