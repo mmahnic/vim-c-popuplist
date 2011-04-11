@@ -40,6 +40,7 @@
     void    destroy();
     void    add_fixed_tab(int col);
     int	    get_tab_size_at(int col);
+    void    set_limits(int min_col, int max_col);
     // write the text and fill to max_col with fillChar if it is not NUL
     int	    write_line(char_u* text, int attr, int row, int fillChar);
   };
@@ -115,6 +116,31 @@ _plwr_get_tab_size_at(_self, col)
     return self->tab_size - ((col - last_tab) % self->tab_size);
 }
 
+    static void
+_plwr_set_limits(_self, min_col, max_col)
+    void* _self;
+    int min_col;
+    int max_col;
+{
+    METHOD(LineWriter, set_limits);
+    self->min_col = min_col;
+    self->max_col = max_col;
+}
+
+/*
+ *        L         R		Border
+ *        01234567890		Box column
+ * 012345678901234567890	Text column
+ * .......7.............	Offset = 7
+ *        .         .
+ * ABCDEFGHI ABCDEFGHI A	Single characters in text
+ * 123456789012345678		... text width (pwidth)
+ *        HI ABCDEFGH		... displayed
+ *        .         .
+ * ABCDDDEEE ABCDDDEEE A	Wide characters in text
+ * 1236669990123666999		... text width (pwidth)
+ *        .. ABCDDD..		... displayed
+ */
     static int
 _plwr_write_line(_self, text, row, attr, fillChar)
     void* _self;
@@ -127,6 +153,8 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     char_u *p, *s;
     int pwidth, w, col, endcol;
 
+    if (!text)
+	text = blankline;
     p = text;		    /* current character */
     s = NULL;		    /* string start */
     pwidth = 0;		    /* total width including current character */
@@ -139,7 +167,7 @@ _plwr_write_line(_self, text, row, attr, fillChar)
 	else
 	    w = ptr2cells(p);
 	pwidth += w;
-	if (pwidth < self->offset)
+	if (pwidth <= self->offset)
 	{
 	    if (*p == NUL) break;
 	    else continue;
@@ -149,8 +177,8 @@ _plwr_write_line(_self, text, row, attr, fillChar)
 	    if (pwidth - self->offset < w)
 	    {
 		/* character partly visible -- output spaces */
-		endcol = col + pwidth - self->offset; /* XXX: +-1 */
-		screen_fill(row, row + 1, col, endcol, ' ', ' ', attr);
+		endcol = col + pwidth - 1 - self->offset;
+		screen_fill(row, row + 1, col, endcol + 1, ' ', ' ', attr);
 		col = endcol + 1;
 		continue;
 	    }
@@ -175,9 +203,9 @@ _plwr_write_line(_self, text, row, attr, fillChar)
 	    s = NULL;
 	    if (*p == TAB)
 	    {
-		endcol = limit_value(col + w, col, self->max_col);
-		screen_fill(row, row + 1, col, endcol+1, ' ', ' ', attr);
-		col = endcol;
+		endcol = limit_value(col + w - 1, col, self->max_col);
+		screen_fill(row, row + 1, col, endcol + 1, ' ', ' ', attr);
+		col = endcol + 1;
 	    }
 	    else break;
 	}

@@ -270,11 +270,14 @@ class CClass(object):
     def self_cast_expr(self):
         return "CAST_CLASS(%s, %s);" % (self.thisname, self.name)
 
+
     def dump_constructor(self, set_vtable=True):
-        if self.baseClass != None:
-            self.baseClass.dump_constructor(set_vtable=False) # should be called, not dumped
+        if self.baseClass:
+            base = self.baseClass.find_methods_super_class("init")
+            if base != None:
+                writeln("    %s(_%s);\\" % (base.method_name("init"), base.thisname));
         if set_vtable and self.vtable_ptr != None:
-            writeln("self->%s = &%s;\\" % (self.vtable_ptr, self.class_vtable));
+            writeln("    self->%s = &%s;\\" % (self.vtable_ptr, self.class_vtable));
         for m in self.members:
             typ = m.type
             amo = rxarray.match(typ)
@@ -282,7 +285,8 @@ class CClass(object):
             itm = amo.group(1).strip()
             c = find_class(itm)
             if c != None: itm = c.object_type
-            writeln("ga_init2(&%s->%s, sizeof(%s), 128);\\" % (self.thisname, m.name, itm))
+            writeln("    ga_init2(&%s->%s, sizeof(%s), 128);\\" % (self.thisname, m.name, itm))
+
 
     def dump_destructor(self):
         writeln("") # end _BODY
@@ -294,9 +298,12 @@ class CClass(object):
             itm = amo.group(1).strip()
             c = find_class(itm)
             if c != None: itm = c.object_type
-            writeln("ga_clear(&%s->%s);\\" % (self.thisname, m.name))
+            writeln("    ga_clear(&%s->%s);\\" % (self.thisname, m.name))
         if self.baseClass != None:
-            self.baseClass.dump_destructor() # should be called, not dumped
+            base = self.baseClass.find_methods_super_class("destroy")
+            if base != None:
+                writeln("    %s(_%s);\\" % (base.method_name("destroy"), base.thisname));
+
 
     def find_methods_super_class(self, method):
         if self.hasMethod(method):

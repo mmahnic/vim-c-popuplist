@@ -50,6 +50,45 @@ static char_u blankline[] = "";
 #define STRCMP_SORT_DOWN  -1
 typedef int (*__puls_compar_fn_t)(const void* a, const void* b);
 
+#if 1
+list_T PULSLOG;
+    static void
+pulslog(char* fmt, ...)
+{
+    va_list	ap;
+    int		str_l;
+    static char buf[128+1];
+    listitem_T	*item;
+
+    va_start(ap, fmt);
+    str_l = vim_vsnprintf(&buf[0], 128, fmt, ap, NULL);
+    va_end(ap);
+
+    item = (listitem_T*) alloc(sizeof(listitem_T));
+    item->li_tv.v_type = VAR_STRING;
+    item->li_tv.vval.v_string = vim_strsave(buf);
+
+    /* from list_append */
+    if (PULSLOG.lv_last == NULL)
+    {
+	PULSLOG.lv_first = item;
+	PULSLOG.lv_last = item;
+	item->li_prev = NULL;
+    }
+    else
+    {
+	PULSLOG.lv_last->li_next = item;
+	item->li_prev = PULSLOG.lv_last;
+	PULSLOG.lv_last = item;
+    }
+    ++PULSLOG.lv_len;
+    item->li_next = NULL;
+}
+#define LOG( X )   pulslog X
+#else
+#define LOG( X )
+#endif
+
     static int
 limit_value(value, vmin, vmax)
     int value;
@@ -89,6 +128,36 @@ _stristr(haystack, needle)
     }
 
     return NULL;
+}
+
+    static void
+_str_assign(dest, src)
+    char_u** dest;
+    char_u* src;
+{
+    if (! dest)
+	return;
+    if (*dest && src && STRLEN(*dest) == STRLEN(src))
+    {
+	STRCPY(*dest, src);
+	return;
+    }
+    if (*dest)
+	vim_free(*dest);
+    if (src)
+	*dest = vim_strsave(src);
+    else
+	*dest = NULL;
+}
+
+    static void
+_str_free(str)
+    char_u** str;
+{
+    if (!str || !*str)
+	return;
+    vim_free(*str);
+    *str = NULL;
 }
 
 #include "popupls_.ci" /* created by mmoocc.py from class definitions in [ooc] blocks */
@@ -258,6 +327,7 @@ _PopupItem_cmp_score(a, b) /* PopupItemCompare_Fn */
   {
     array(PopupItem)	items;
     dict_T*		commands;  // commands defined in vim-script
+    char_u*		title;
     void	init();
     void	destroy();
     void	read_options(dict_T* options);
@@ -293,6 +363,7 @@ _iprov_init(_self)
 {
     METHOD(ItemProvider, init);
     self->commands = NULL;
+    self->title = NULL;
 }
 
     static void
@@ -305,6 +376,7 @@ _iprov_destroy(_self)
     self->op->clear_items(self);
 
     self->commands = NULL; /* we don't own them */
+    _str_free(&self->title);
 
     END_DESTROY(ItemProvider);
 }
@@ -315,6 +387,12 @@ _iprov_read_options(_self, options)
     dict_T* options;
 {
     METHOD(ItemProvider, read_options);
+    dictitem_T* option;
+    option = dict_find(options, "title", -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
+	_str_assign(&self->title, option->di_tv.vval.v_string);
+    }
 }
 
     static void
@@ -409,7 +487,7 @@ _iprov_get_title(_self)
     void* _self;
 {
     METHOD(ItemProvider, get_title);
-    return NULL;
+    return self->title;
 }
 
     static void
@@ -917,8 +995,8 @@ _bxal_set_limits(_self, left, top, right, bottom)
     METHOD(BoxAligner, set_limits);
     self->limits.left = left;
     self->limits.top = top;
-    self->limits.width = right-left;
-    self->limits.height = bottom-top;
+    self->limits.width = right-left+1;
+    self->limits.height = bottom-top+1;
 }
 
     static void
@@ -974,7 +1052,9 @@ _bxal_align(_self, box, border)
     int px, py, sx, sy;
     Box_T* limits = &self->limits;
 
-    /* TODO: screen=18, puls=ss puts the box one line too high */
+    LOG(("Screen: rows=%d cols=%d", Rows, Columns));
+    LOG(("Limits: l=%d, t=%d, r=%d, b=%d", limits->left, limits->top, _box_right(limits), _box_bottom(limits)));
+    LOG(("Pos: on_screen=%c%c box_point=%c%c", self->screen[0], self->screen[1], self->popup[0], self->popup[1]));
 
     sx = _num_to_coord(self->screen[0], 0, limits->width-1);
     sy = _num_to_coord(self->screen[1], 0, limits->height-1);
@@ -990,6 +1070,8 @@ _bxal_align(_self, box, border)
     box->left = limit_value(limits->left + sx - px, limits->left, _box_right(limits));
     box->top = limit_value(limits->top + sy - py, limits->top, _box_bottom(limits));
 
+    LOG(("Box A: l=%d, t=%d, r=%d, b=%d", box->left, box->top, _box_right(box), _box_bottom(box)));
+
     if (border)
     {
 	/* adjust if the border is present and outside of limits */
@@ -1001,6 +1083,8 @@ _bxal_align(_self, box, border)
 	    ++box->top;
 	else if (border->active[WINBORDER_BOTTOM] && _box_bottom(box) + 1 > _box_bottom(limits))
 	    --box->top;
+
+	LOG(("Box B: l=%d, t=%d, r=%d, b=%d", box->left, box->top, _box_right(box), _box_bottom(box)));
     }
 }
 
@@ -1054,11 +1138,7 @@ _skmap_destroy(_self)
     void* _self;
 {
     METHOD(SimpleKeymap, destroy);
-    if (self->name)
-    {
-	vim_free(self->name);
-	self->name = NULL;
-    }
+    _str_free(&self->name);
     if (self->key2cmd)
     {
 	dict_unref(self->key2cmd); /* TODO: make dict_unref non-static in eval.c */
@@ -1073,12 +1153,7 @@ _skmap_set_name(_self, name)
     char_u* name;
 {
     METHOD(SimpleKeymap, set_name);
-    if (self->name)
-	vim_free(self->name);
-    if (name)
-	self->name = vim_strsave(name);
-    else
-	self->name = NULL;
+    _str_assign(&self->name, name);
 };
 
     static char_u*
@@ -1196,6 +1271,67 @@ _skmap_clear_all_keys(_self)
     ++self->key2cmd->dv_refcount;
 }
 
+/* Attribute intialization. Use custom names for the popup list.
+ * If a name doesn't exist in the syntax table, use PUM values. */
+typedef struct _puls_hl_attrs_T {
+    char* name;		/* name used in syntax files */
+    int   attr;		/* attribute returned by syn_id2attr */
+
+    /* Positive: PUM HLF_xxx values to get default attr values.
+     * Negative or zero: index into _puls_hl_attrs, a back-reference. */
+    int   default_id;
+} _puls_hl_attrs_T;
+
+#define PULSATTR_NORMAL		0
+#define PULSATTR_SELECTED	1
+#define PULSATTR_TITLE		2
+#define PULSATTR_TITLE_SEL	3
+#define PULSATTR_MARKED		4
+#define PULSATTR_MARKED_SEL	5
+#define PULSATTR_BORDER		6
+#define PULSATTR_SCROLL_BAR	7
+#define PULSATTR_SCROLL_THUMB	8
+#define PULSATTR_SCROLL_SPACE	9 /* special attr when scrollbar page is rendered with spaces */
+#define PULSATTR_INPUT		10
+#define PULSATTR_INPUT_ACTIVE	11
+
+static _puls_hl_attrs_T _puls_hl_attrs[] = {
+    { "PulsNormal",	    0, HLF_PNI },
+    { "PulsSelected",	    0, HLF_PSI },
+    { "PulsTitleItem",	    0, -PULSATTR_NORMAL },
+    { "PulsTitleItemSel",   0, -PULSATTR_SELECTED },
+    { "PulsMarked",	    0, HLF_PSI },
+    { "PulsMarkedSel",	    0, -PULSATTR_SELECTED },
+    { "PulsBorder",	    0, -PULSATTR_NORMAL },
+    { "PulsScrollBar",	    0, -PULSATTR_BORDER },
+    { "PulsScrollThumb",    0, HLF_PST },
+    { "PulsScrollBarSpace", 0, HLF_PSB },
+    { "PulsInput",	    0, -PULSATTR_BORDER },
+    { "PulsInputActive",    0, HLF_PSI }
+};
+
+    static void
+_update_hl_attrs()
+{
+    int i, size, id;
+    size = sizeof(_puls_hl_attrs) / sizeof(_puls_hl_attrs[0]);
+    for (i = 0; i < size; i++)
+    {
+	id = syn_name2id(_puls_hl_attrs[i].name);
+	if (id > 0)
+	    _puls_hl_attrs[i].attr = syn_id2attr(id);
+	else
+	{
+	    id = _puls_hl_attrs[i].default_id;
+	    if (id > 0)
+		_puls_hl_attrs[i].attr = syn_id2attr(id);
+	    else
+		_puls_hl_attrs[i].attr = _puls_hl_attrs[-id].attr;
+	}
+    }
+}
+
+
 /* [ooc]
  *
   const WINBORDER_TOP = 0;
@@ -1206,19 +1342,28 @@ _skmap_clear_all_keys(_self)
   const SCROLLBAR_THUMB = 1;
   class WindowBorder [wbor]
   {
-    Box*  inner_box;
-    int   item_count;
-    int   active[4];		// visible sides: 'trbl'; 0 - off, otherwise on
-    int   border_chars[8];	// spaces, single, double, minus/bar, ...
-    int   scrollbar_chars[2];
-    int   scrollbar_attr[2];
-    int   scrollbar_thumb;	// size of the scrollbar thumb; 0 - SB is off
-    int   scrollbar_pos;	// left or right border
-    int   border_attr;
+    Box*    inner_box;
+    int     item_count;
+    int     active[4];		// visible sides: 'trbl'; 0 - off, otherwise on
+    int     border_chars[8];	// spaces, single, double, minus/bar, ...
+    int     scrollbar_chars[2];
+    int     scrollbar_attr[2];
+    int     scrollbar_thumb;	// size of the scrollbar thumb; 0 - SB is off
+    int     scrollbar_pos;	// left or right border
+    int     border_attr;
     char_u* title;
+    char_u* mode; 	    // one or two characters
+    char_u* info; 	    // arbitrary info, eg. position; right aligned in frame
+    char_u* input;	    // current input; contents is right aligned in the field
+    int     input_active;   // input field is active, special display
 
     void init();
     void destroy();
+    void set_title(char_u* title);
+    void set_mode_text(char_u* mode); 
+    void set_input_text(char_u* text);
+    void set_input_active(int active);
+    void set_info(char_u* text);
     void prepare_scrollbar(int item_count);
     int  get_scrollbar_kind(int line, int current); // kind of char to draw in line; bar or thumb
     void draw_top();
@@ -1229,34 +1374,73 @@ _skmap_clear_all_keys(_self)
 
 */
 
+// t, tr, r, br, b, bl, l, tl
+static int _frame_blank[]  = { ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ' };
+static int _frame_ascii[]  = { '-', '+', '|', '+', '-', '+', '|', '+' };
+#ifndef FEAT_MBYTE
+static int _frame_single[]  = { '-', '+', '|', '+', '-', '+', '|', '+' };
+static int _frame_double[]  = { '=', '+', '|', '+', '=', '+', '|', '+' };
+static int _frame_mixed1[]  = { '-', '+', '|', '+', '-', '+', '|', '+' };
+static int _frame_mixed2[]  = { '=', '+', '|', '+', '=', '+', '|', '+' };
+static int _frame_custom[]  = { '-', '+', '|', '+', '-', '+', '|', '+' };
+#else
+/* utf-8: "─┐│┘─└│┌"  */
+static int _frame_single[]  = { 0x2500, 0x2510, 0x2502, 0x2518, 0x2500, 0x2514, 0x2502, 0x250c };
+/* utf-8: "═╗║╝═╚║╔" */
+static int _frame_double[]  = { 0x2550, 0x2557, 0x2551, 0x255d, 0x2550, 0x255a, 0x2551, 0x2554 };
+/* utf-8: "─╖║╜─╙║╓" */
+static int _frame_mixed1[]  = { 0x2500, 0x2556, 0x2551, 0x255c, 0x2500, 0x2559, 0x2551, 0x2553 };
+/* utf-8: "═╕│╛═╘│╒" */
+static int _frame_mixed2[]  = { 0x2550, 0x2555, 0x2502, 0x255b, 0x2550, 0x2558, 0x2502, 0x2552 };
+/* single again */
+static int _frame_custom[]  = { 0x2500, 0x2510, 0x2502, 0x2518, 0x2500, 0x2514, 0x2502, 0x250c };
+#endif
+static int* _frames[] = {
+    _frame_blank, _frame_ascii,
+    _frame_single, _frame_double,
+    _frame_mixed1, _frame_mixed2,
+    _frame_custom
+};
+
+
     static void
 _wbor_init(_self)
     void* _self;
 {
     METHOD(WindowBorder, init);
     int i;
+    int *pframe;
     for (i = 0; i < 4; i++)
 	self->active[i] = 1;
     self->scrollbar_thumb = 0;
 
-    // t, tr, r, br, ...
-    self->border_chars[0] = '-';
-    self->border_chars[1] = '+';
-    self->border_chars[2] = '|';
-    self->border_chars[3] = '+';
-    self->border_chars[4] = '-';
-    self->border_chars[5] = '+';
-    self->border_chars[6] = '|';
-    self->border_chars[7] = '+';
-    self->border_attr = highlight_attr[HLF_PNI];
+    /* TODO: user option for frame type: 0-7; 0: no frame, 1: blank, 2: ascii, ...;
+     * TODO: frames 3-7 can be changed with options */
+#ifdef FEAT_MBYTE
+    if (has_mbyte) pframe = _frames[3];
+    else pframe = _frames[0];
+#else
+    pframe = _frames[0];
+#endif
+    for (i = 0; i < 8; i++)
+	self->border_chars[i] = pframe[i];
+
+    self->border_attr = _puls_hl_attrs[PULSATTR_BORDER].attr;
 
     // background, thumb
-    self->scrollbar_chars[SCROLLBAR_BAR]   = '|'; 
+    self->scrollbar_chars[SCROLLBAR_BAR]   = self->border_chars[WINBORDER_RIGHT*2]; 
     self->scrollbar_chars[SCROLLBAR_THUMB] = ' '; 
-    self->scrollbar_attr[SCROLLBAR_BAR]    = highlight_attr[HLF_PNI];
-    self->scrollbar_attr[SCROLLBAR_THUMB]  = highlight_attr[HLF_PST];
+    if (self->scrollbar_chars[SCROLLBAR_BAR] == ' ')
+	self->scrollbar_attr[SCROLLBAR_BAR] = _puls_hl_attrs[PULSATTR_SCROLL_SPACE].attr;
+    else
+	self->scrollbar_attr[SCROLLBAR_BAR] = _puls_hl_attrs[PULSATTR_SCROLL_BAR].attr;
+    self->scrollbar_attr[SCROLLBAR_THUMB]  = _puls_hl_attrs[PULSATTR_SCROLL_THUMB].attr;
     self->scrollbar_pos = WINBORDER_RIGHT;
     self->title = NULL;
+    self->info = NULL;
+    self->mode = NULL;
+    self->input = NULL;
+    self->input_active = 0;
 }
 
     static void
@@ -1265,8 +1449,76 @@ _wbor_destroy(_self)
 {
     METHOD(WindowBorder, destroy);
     self->inner_box = NULL;     /* frame doesn't own the box */
-    self->title = NULL;         /* frame doesn't own the title */
+    _str_free(&self->title);
+    _str_free(&self->info);
+    _str_free(&self->mode);
+    _str_free(&self->input);
     END_DESTROY(WindowBorder);
+}
+
+    static void
+_wbor_set_title(_self, title)
+    void* _self;
+    char_u* title;
+{
+    METHOD(WindowBorder, set_title);
+    _str_assign(&self->title, title);
+}
+
+    static void
+_wbor_set_mode_text(_self, mode)
+    void* _self;
+    char_u* mode;
+{
+    METHOD(WindowBorder, set_mode_text);
+    char_u buf[16];
+    char_u *p;
+    int i = 2;
+    p = buf;
+    if (mode)
+    {
+	while (i > 0 && *mode != NUL)
+	{
+	    MB_COPY_CHAR(mode, p);
+	    --i;
+	}
+    }
+    while (i > 0)
+    {
+	int ch = self->border_chars[WINBORDER_BOTTOM*2];
+	p += mb_char2bytes(ch, p);
+	--i;
+    }
+    *p = NUL;
+
+    _str_assign(&self->mode, buf);
+}
+
+    static void
+_wbor_set_input_text(_self, text)
+    void* _self;
+    char_u* text;
+{
+    METHOD(WindowBorder, set_input_text);
+    _str_assign(&self->input, text);
+}
+
+    static void
+_wbor_set_input_active(_self, active)
+    void* _self;
+    int active;
+{
+    METHOD(WindowBorder, set_input_active);
+    self->input_active = active;
+}
+
+    static void
+_wbor_set_info(_self, text)
+    void* _self;
+    char_u* text;
+{
+    METHOD(WindowBorder, set_info);
+    _str_assign(&self->info, text);
 }
 
     static void
@@ -1311,7 +1563,7 @@ _wbor_draw_top(_self)
     METHOD(WindowBorder, draw_top);
     int row, col, right, ch;
     LineWriter_T* writer;
-    if (! self->inner_box)
+    if (! self->inner_box || !self->active[WINBORDER_TOP])
 	return;
 
     row = self->inner_box->top - 1;
@@ -1340,25 +1592,80 @@ _wbor_draw_bottom(_self)
     void* _self;
 {
     METHOD(WindowBorder, draw_bottom);
-    int row, col, right, ch;
-    if (! self->inner_box)
+    int row, col, endcol, right, ch, chbot, attr, iw;
+    LineWriter_T* writer;
+    if (! self->inner_box || !self->active[WINBORDER_BOTTOM])
 	return;
 
     row = _box_bottom(self->inner_box) + 1;
     col = self->inner_box->left;
+    right = _box_right(self->inner_box);
+    attr = self->border_attr;
+    LOG(("draw_bottom: row=%d col=%d", row, col));
     if (self->active[WINBORDER_LEFT])
     {
-	screen_putchar(self->border_chars[WINBORDER_LEFT*2+1], row, col-1, self->border_attr);
+	screen_putchar(self->border_chars[WINBORDER_BOTTOM*2+1], row, col-1, attr);
     }
 
-    right = _box_right(self->inner_box);
-    ch = self->border_chars[WINBORDER_TOP*2];
-    screen_fill(row, row + 1, col, right+1, ch, ch, self->border_attr);
+    chbot = self->border_chars[WINBORDER_BOTTOM*2];
+    screen_putchar(chbot, row, col, attr);
+    ++col;
+
+    writer = new_LineWriter();
+    writer->tab_size = -1;
+
+    /* MODE */
+    writer->op->set_limits(writer, col, col+1);
+    writer->op->write_line(writer, self->mode, row, attr, chbot);
+    col += 2;
+
+    screen_putchar(chbot, row, col, attr);
+    ++col;
+
+    /* INPUT */
+    /* TODO: change attr and fillChar accordning on input_active */
+    if (self->input_active)
+    {
+	attr = _puls_hl_attrs[PULSATTR_INPUT_ACTIVE].attr;
+	ch = ' ';
+    }
+    else
+    {
+	attr = _puls_hl_attrs[PULSATTR_INPUT].attr;
+	ch = chbot;
+    }
+    iw = self->inner_box->width / 3;
+    if (iw < 8)
+	iw = 8;
+    endcol = col + iw;
+    if (endcol > right)
+	endcol = right;
+    writer->op->set_limits(writer, col, endcol);
+    writer->op->write_line(writer, self->input, row, attr, ch);
+    col = endcol + 1;
+
+    attr = self->border_attr;
+    if (col < right)
+    {
+	screen_putchar(chbot, row, col, attr);
+	++col;
+    }
+
+    /* INFO */
+    if (col < right)
+    {
+	writer->op->set_limits(writer, col, right - 1);
+	writer->op->write_line(writer, self->info, row, attr, chbot);
+    }
+
+    screen_putchar(chbot, row, right, attr);
 
     if (self->active[WINBORDER_RIGHT])
     {
-	screen_putchar(self->border_chars[WINBORDER_TOP*2+1], row, right+1, self->border_attr);
+	screen_putchar(self->border_chars[WINBORDER_BOTTOM*2-1], row, right+1, attr);
     }
+
+    CLASS_DELETE(writer);
 }
 
     static void
@@ -1422,8 +1729,10 @@ _wbor_draw_item_right(_self, line, current)
   const PULS_DEF_HEIGHT = 10;
   const PULS_DEF_WIDTH  = 20;
   const PULS_MIN_WIDTH  = 10;
+  const PULS_MIN_HEIGHT = 1;
   const PULS_REDRAW_CURRENT = 0x01;
-  const PULS_REDRAW_ALL     = 0x02;
+  const PULS_REDRAW_FRAME   = 0x02;
+  const PULS_REDRAW_ALL     = 0x80;
   class PopupList(object) [puls]
   {
     ItemProvider*   model;	// items of the displayed puls
@@ -1453,6 +1762,7 @@ _wbor_draw_item_right(_self, line, current)
     int	    do_command(char_u* command);
     void    prepare_result(dict_T* result);
     void    set_title(char_u* title);
+    void    set_current(int index);
   };
 
 */
@@ -1499,11 +1809,7 @@ _puls_destroy(_self)
     CLASS_DELETE(self->km_normal);
     CLASS_DELETE(self->km_filter);
     CLASS_DELETE(self->border);
-    if (self->title)
-    {
-	vim_free(self->title);
-	self->title = NULL;
-    }
+    _str_free(&self->title);
 
     END_DESTROY(PopupList);
 }
@@ -1515,17 +1821,8 @@ _puls_set_title(_self, title)
     char_u* title;
 {
     METHOD(PopupList, set_title);
-    if (self->title)
-	vim_free(self->title);
-    if (! title)
-	self->title = NULL;
-    else
-    {
-	self->title = (char_u*) alloc(STRLEN(title) + 1);
-	STRCPY(self->title, title);
-    }
-    if (self->border)
-	self->border->title = self->title;
+    _str_assign(&self->title, title);
+    self->border->op->set_title(self->border, title);
 }
 
 
@@ -1694,41 +1991,52 @@ _puls_calc_size(_self, limit_width, limit_height)
     /* accomodate space for the (outer) border */
     if (self->border)
     {
-	w = 0;
-	if (self->border->active[WINBORDER_TOP])
-	    ++w;
-	if (self->border->active[WINBORDER_BOTTOM])
-	    ++w;
-	for (i = 0; i < 2; i++)
-	{
-	    if (i+1 >= w)
-		break;
-	    if (w > 0 && w + self->position.height > limit_height)
-	    {
-		if (self->position.height > 3)
-		    --self->position.height;
-		/* TODO: else: remove top/bottom border */
-	    }
-	}
-	w = 0;
+	/* WIDTH */
+	w = self->position.width;
 	if (self->border->active[WINBORDER_LEFT])
 	    ++w;
 	if (self->border->active[WINBORDER_RIGHT])
 	    ++w;
-	for (i = 0; i < 2; i++)
+	while(w > limit_width && w > PULS_MIN_WIDTH)
 	{
-	    if (i+1 >= w)
-		break;
-	    if (w > 0 && w + self->position.width > limit_width)
-	    {
-		if (self->position.width > PULS_MIN_WIDTH)
-		    --self->position.width;
-		/* TODO: else: remove left/right border */
-	    }
+	    --self->position.width;
+	    --w;
+	}
+	while(w > limit_width && self->border->active[WINBORDER_LEFT])
+	{
+	    self->border->active[WINBORDER_LEFT] = 0;
+	    --w;
+	}
+	while(w > limit_width && self->border->active[WINBORDER_RIGHT])
+	{
+	    self->border->active[WINBORDER_RIGHT] = 0;
+	    --w;
+	}
+
+	/* HEIGHT */
+	w = self->position.height;
+	if (self->border->active[WINBORDER_TOP])
+	    ++w;
+	if (self->border->active[WINBORDER_BOTTOM])
+	    ++w;
+	while(w > limit_height && w > PULS_MIN_HEIGHT)
+	{
+	    --self->position.height;
+	    --w;
+	}
+	while(w > limit_height && self->border->active[WINBORDER_TOP])
+	{
+	    self->border->active[WINBORDER_TOP] = 0;
+	    --w;
+	}
+	while(w > limit_height && self->border->active[WINBORDER_BOTTOM])
+	{
+	    self->border->active[WINBORDER_BOTTOM] = 0;
+	    --w;
 	}
     }
 
-    return self->position.width >= PULS_MIN_WIDTH && self->position.height >= 1;
+    return self->position.width >= PULS_MIN_WIDTH && self->position.height >= PULS_MIN_HEIGHT;
 }
 
     static void
@@ -1756,11 +2064,9 @@ _puls_redraw(_self)
     int		i, idx_filter, idx_model;
     int		row, col, bottom, right;
     int		attr;
-    int		attr_norm = highlight_attr[HLF_PNI];
-    int		attr_select = highlight_attr[HLF_PSI];
-    int		attr_scroll = highlight_attr[HLF_PSB];
-    int		attr_thumb = highlight_attr[HLF_PST];
-    int		attr_mark = highlight_attr[HLF_PSB];
+    int		attr_norm   = _puls_hl_attrs[PULSATTR_NORMAL].attr;
+    int		attr_select = _puls_hl_attrs[PULSATTR_SELECTED].attr;
+    int		attr_mark   = _puls_hl_attrs[PULSATTR_MARKED].attr;
     char_u	*text;
     int		item_count;
     LineWriter_T* writer;
@@ -1837,6 +2143,35 @@ _puls_redraw(_self)
     windgoto(msg_row, msg_col);
 }
 
+    static void
+_puls_set_current(_self, index)
+    void* _self;
+    int index;
+{
+    METHOD(PopupList, set_current);
+    int item_count = self->filter->op->get_item_count(self->filter);
+    if (index < 0)
+	index = 0;
+    if (index >= item_count)
+	index = item_count - 1;
+    self->current = index;
+    self->need_redraw |= PULS_REDRAW_CURRENT;
+    if (self->current - self->first >= self->position.height)
+    {
+	self->first = self->current - self->position.height + 1;
+	if (self->first < 0)
+	    self->first = 0;
+	self->need_redraw |= PULS_REDRAW_ALL;
+    }
+    else if (self->current < self->first)
+    {
+	self->first = self->current - 3; /* TODO: optional scrolloff for the puls */
+	if (self->first < 0)
+	    self->first = 0;
+	self->need_redraw |= PULS_REDRAW_ALL;
+    }
+}
+
     static int
 _puls_do_command(_self, command)
     void* _self;
@@ -1848,8 +2183,8 @@ _puls_do_command(_self, command)
     int idx_model_current = self->filter->op->get_model_index(self->filter, self->current);
 
     int horz_step = self->position.width / 2; /* TODO: horz_step could be configurable */
-    if (horz_step < PULS_DEF_WIDTH / 2)
-	horz_step = PULS_DEF_WIDTH / 2;
+    if (horz_step < PULS_MIN_WIDTH / 2)
+	horz_step = PULS_MIN_WIDTH / 2;
 
     if (EQUALS(command, "next-item"))
     {
@@ -1943,6 +2278,10 @@ _puls_do_command(_self, command)
 	    if (self->filter->op->backspace(self->filter))
 	    {
 		self->filter->op->filter_items(self->filter);
+		if (self->current >= self->filter->op->get_item_count(self->filter))
+		    self->op->set_current(self, 0);
+		if (self->border)
+		    self->border->op->set_input_text(self->border, self->filter->text);
 		self->need_redraw |= PULS_REDRAW_ALL;
 	    }
 	}
@@ -2028,8 +2367,10 @@ _puls_test_loop(pplist, rettv)
     PopupList_T* pplist;
     typval_T*    rettv;
 {
+    char buf[32];
     SimpleKeymap_T *modemap;
     ItemProvider_T *pmodel;
+    WindowBorder_T *pborder;
 
 #define MAX_KEY_SIZE	6*3+1		/* XXX: What is the longest sequence key_to_str can produce? */
 #define MAX_SEQ_LEN	8*MAX_KEY_SIZE
@@ -2039,8 +2380,11 @@ _puls_test_loop(pplist, rettv)
     char_u* command;
     int seq_len, key, found, prev_found;
 
+    pborder = pplist->border;
     pmodel = pplist->model;
-    pplist->op->set_title(pplist, pmodel->op->get_title(pmodel));
+    ps = pmodel->op->get_title(pmodel);
+    if (ps != NULL)
+	pplist->op->set_title(pplist, ps);
 
     modemap = pplist->km_normal;
     ps = sequence;
@@ -2049,15 +2393,25 @@ _puls_test_loop(pplist, rettv)
     found = KM_NOTFOUND;
     for (;;)
     {
+	if (pborder)
+	{
+	    vim_snprintf(buf, 32, "%d/%d/%d", pplist->current + 1,
+		    pplist->filter->op->get_item_count(pplist->filter),
+		    pmodel->op->get_item_count(pmodel));
+	    pborder->op->set_info(pborder, buf);
+	}
 	if (pplist->need_redraw)
 	{
 	    pplist->op->redraw(pplist);
+	}
+	else if (pborder)
+	{
+	    pborder->op->draw_bottom(pborder);
 	}
 #if 1   /* XXX: Diagnostic code */
 	int	attr = highlight_attr[HLF_PNI];
 	int	tl = 0;
 	{
-	    char buf[16];
 	    sprintf(buf, " Key: %d ", key);
 	    screen_puts_len(buf, STRLEN(buf), msg_row, msg_col+tl, attr);
 	    tl += STRLEN(buf);
@@ -2103,6 +2457,10 @@ _puls_test_loop(pplist, rettv)
 		if (pplist->filter->op->add_text(pplist->filter, sequence))
 		{
 		    pplist->filter->op->filter_items(pplist->filter);
+		    if (pplist->current >= pplist->filter->op->get_item_count(pplist->filter))
+			pplist->op->set_current(pplist, 0);
+		    if (pborder)
+			pborder->op->set_input_text(pborder, pplist->filter->text);
 		    pplist->need_redraw |= PULS_REDRAW_ALL;
 		    /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 		}
@@ -2127,13 +2485,24 @@ _puls_test_loop(pplist, rettv)
 	else if (EQUALS(command, "modeswitch:normal"))
 	{
 	    modemap = pplist->km_normal;
-	    /* TODO: pplist->need_redraw |= PULS_REDRAW_FRAME;*/
+	    if (pborder)
+	    {
+		pborder->op->set_mode_text(pborder, "");
+		pborder->op->set_input_active(pborder, 0);
+	    }
+	    pplist->need_redraw |= PULS_REDRAW_FRAME;
 	    continue;
 	}
 	else if (EQUALS(command, "modeswitch:filter"))
 	{
 	    modemap = pplist->km_filter;
-	    /* TODO: pplist->need_redraw |= PULS_REDRAW_FRAME;*/
+	    if (pborder)
+	    {
+		pborder->op->set_mode_text(pborder, "/");
+		pborder->op->set_input_text(pborder, pplist->filter->text);
+		pborder->op->set_input_active(pborder, 1);
+	    }
+	    pplist->need_redraw |= PULS_REDRAW_FRAME;
 	    continue;
 	}
 	else if (pplist->op->do_command(pplist, command))
@@ -2232,7 +2601,10 @@ puls_test(argvars, rettv)
     dict_T* options = NULL;
 
     _init_vtables();
+    _update_hl_attrs();
     _dicti_init(&itd);
+
+    LOG(("---------- New listbox -----------"));
 
     if (argvars[0].v_type == VAR_DICT)
     {
@@ -2268,12 +2640,15 @@ puls_test(argvars, rettv)
 	    BufferItemProvider_T* bmodel = new_BufferItemProvider();
 	    bmodel->op->list_buffers(bmodel);
 	    model = (ItemProvider_T*) bmodel;
+	    LOG(("Buffers"));
 	}
 #endif
-	/* Currently only special providers need to have options */
-	if (model && options)
+	if (EQUALS(special_items, "pulslog"))
 	{
-	    model->op->read_options(model, options);
+	    LOG(("PULS LOG"));
+	    VimlistItemProvider_T* vlmodel = new_VimlistItemProvider();
+	    vlmodel->op->set_list(vlmodel, &PULSLOG);
+	    model = (ItemProvider_T*) vlmodel;
 	}
 
 	if (! model)
@@ -2363,7 +2738,13 @@ puls_test(argvars, rettv)
 		aligner->op->set_align_params(aligner, option->di_tv.vval.v_dict);
 	}
 
-	option = dict_find(options, "filter", -1L);
+	option = dict_find(options, "filter", -1L); /* TODO */
+
+	/* Currently only special providers need to have options */
+	if (model)
+	{
+	    model->op->read_options(model, options);
+	}
     }
 
     pplist->filter  = filter;
