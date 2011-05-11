@@ -25,6 +25,7 @@
  * GNU General Public License for more details.
  */
 
+
 /* [ooc]
  *
   // Write text in one line. Take care of line offsets. Expand tabs.
@@ -42,7 +43,7 @@
     int	    get_tab_size_at(int col);
     void    set_limits(int min_col, int max_col);
     // write the text and fill to max_col with fillChar if it is not NUL
-    int	    write_line(char_u* text, int attr, int row, int fillChar);
+    int	    write_line(char_u* text, int row, int attr, int fillChar);
   };
 */
 
@@ -151,10 +152,12 @@ _plwr_write_line(_self, text, row, attr, fillChar)
 {
     METHOD(LineWriter, write_line);
     char_u *p, *s;
-    int pwidth, w, col, endcol;
+    int pwidth, max_pwidth, w, col, endcol;
 
     if (!text)
 	text = blankline;
+    max_pwidth = self->offset + self->max_col - self->min_col + 1;
+
     p = text;		    /* current character */
     s = NULL;		    /* string start */
     pwidth = 0;		    /* total width including current character */
@@ -184,7 +187,7 @@ _plwr_write_line(_self, text, row, attr, fillChar)
 	    }
 	    s = p;
 	}
-	if (*p == NUL || *p == TAB || pwidth >= self->max_col)
+	if (*p == NUL || *p == TAB || pwidth >= max_pwidth)
 	{
 	    /* Display the text that fits or comes before a Tab.
 	     * First convert it to printable characters. */
@@ -212,4 +215,411 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     }
     if (col <= self->max_col && fillChar != NUL)
 	screen_fill(row, row + 1, col, self->max_col+1, fillChar, fillChar, attr);
+}
+
+/* [ooc]
+ *
+  // Filter the text to be written and calculate text attributes
+  // It may hide some characters, it may add new ones.
+  class Highlighter [hltr]
+  {
+    Highlighter* next;    // chained highlighters
+    int	    active;
+    int	    state;
+    int	    default_attr;
+    int	    text_attr;	// attribute starting at next_char
+    int	    text_width;	// width of text processed
+    char_u* match_end;
+    void    init();
+    void    destroy();
+    void    bol_init(void* extra_data);
+
+    // Intended use of match_end in calc_attr:
+    //    if (self->match_end >= next_char) return 1;
+    //    ... process num_chars from next_char;
+    //    ... processed chars _must_ have the same attribute
+    //    self->match_end = next_char + num_chars;
+    // @returns
+    //    0 if the highlighter doesn't affect the output
+    //    1 if the highlighter has suggestions for the output width and attr
+    int	    calc_attr(char_u* next_char);
+  };
+
+  // Highlights shortcuts that start with the '&' symbol; '&' is removed.
+  // TODO: a new state for auto-assigned shortcuts; the shortcut is assigned to an item
+  // as the offset from the start of the item. In state '3', the ShortcutHighlighter
+  // writes a new attribute at that offset. A negative offset means: use only '&'.
+  class ShortcutHighlighter(Highlighter) [hlshrt]
+  {
+    int	    shortcut_attr;
+    void    init();
+    int	    calc_attr(char_u* next_char);
+  };
+
+  class ISearchHighlighter(Highlighter) [hlisrc]
+  {
+    int	    match_attr;
+    char_u* pattern;
+    int     patt_len;
+    void    init();
+    void    destroy();
+    int	    calc_attr(char_u* next_char);
+    void    set_pattern(char_u* pattern);
+  };
+*/
+
+    static void
+_hltr_init(_self)
+    void* _self;
+{
+    METHOD(Highlighter, init);
+    self->next = NULL;
+    self->active = 1;
+    self->state = 0; /* TODO: give names to the states */
+    self->default_attr = 0;
+    self->text_attr = 0;
+    self->text_width = -1; /* let the caller calculate it */
+    self->match_end = NULL;
+}
+
+    static void
+_hltr_destroy(_self)
+    void* _self;
+{
+    METHOD(Highlighter, destroy);
+    END_DESTROY(Highlighter);
+}
+
+    static void
+_hltr_bol_init(_self, extra_data)
+    void* _self;
+    void* extra_data;
+{
+    METHOD(Highlighter, bol_init);
+    self->state = 0;
+    self->text_attr = self->default_attr;
+    self->text_width = -1;
+    self->match_end = NULL;
+}
+
+    static int
+_hltr_calc_attr(_self, next_char)
+    void* _self;
+    char_u* next_char;
+{
+    METHOD(Highlighter, calc_attr);
+    return 1;
+}
+
+    static void
+_hlshrt_init(_self)
+    void* _self;
+{
+    METHOD(ShortcutHighlighter, init);
+    self->shortcut_attr = self->default_attr;
+}
+
+    static int
+_hlshrt_calc_attr(_self, next_char)
+    void* _self;
+    char_u* next_char;
+{
+    METHOD(ShortcutHighlighter, calc_attr);
+    int rv = 0;
+
+    /* states: 0 - normal, 1 - hl next char, 2 - un-hl this char */
+    if (self->state == 1)
+    {
+	self->text_width = -1;
+	self->state = 2;
+	if (*next_char == '&')
+	{
+	    self->text_attr = self->default_attr;
+	    return 0;
+	}
+	else
+	    self->text_attr = self->shortcut_attr;
+	return 1;
+    }
+    else if (self->state == 2)
+    {
+	self->text_attr = self->default_attr;
+	self->state = 0;
+	rv = 1;
+    }
+
+    if (*next_char == '&' && !vim_iswhite(*(next_char+1)))
+    {
+	self->state = 1;
+	self->text_width = 0;
+	rv = 1;
+    }
+
+    return rv;
+}
+
+    static void
+_hlisrc_init(_self)
+    void* _self;
+{
+    METHOD(ISearchHighlighter, init);
+    self->pattern = NULL;
+    self->patt_len = 0;
+    self->match_attr = self->default_attr;
+}
+
+    static void
+_hlisrc_destroy(_self)
+    void* _self;
+{
+    METHOD(ISearchHighlighter, destroy);
+    _str_free(&self->pattern);
+    END_DESTROY(ISearchHighlighter);
+}
+
+    static void
+_hlisrc_set_pattern(_self, pattern)
+    void* _self;
+    char_u* pattern;
+{
+    METHOD(ISearchHighlighter, set_pattern);
+    _str_assign(&self->pattern, pattern);
+    self->patt_len = STRLEN(self->pattern);
+}
+
+    static int
+_hlisrc_calc_attr(_self, next_char)
+    void* _self;
+    char_u* next_char;
+{
+    METHOD(ISearchHighlighter, calc_attr);
+    if (! self->pattern || ! self->patt_len)
+	return 0;
+
+    if (self->match_end >= next_char)
+	return 1;
+
+    if (0 == STRNCMP(next_char, self->pattern, self->patt_len)) /* TODO: support regex */
+    {
+	self->text_attr = _puls_hl_attrs[PULSATTR_SELECTED].attr;
+	self->match_end = next_char + self->patt_len - 1; /* TODO: match length */
+	return 1;
+    }
+    else
+    {
+	self->text_attr = self->default_attr;
+	self->match_end = next_char;
+    }
+    return 0;
+}
+
+
+/* [ooc]
+ *
+  // Write text in one line. Take care of line offsets. Expand tabs. Highlight text.
+  class LineHighlightWriter(LineWriter) [plhlwr]
+  {
+    char_u* _tmpbuf;
+    char_u* _tmplimit;
+    Highlighter* highlighters;
+    void    init();
+    void    destroy();
+    int	    write_line(char_u* text, int row, int init_attr, int fillChar);
+
+    // text_end points into _tmpbuf; *text_end will be set to NUL;
+    int	    flush(char_u* text_end, int row, int col, int attr);
+  }
+  // TODO: instead of one highlighter, use multiple highliters: hlsyn,
+  // hlshortcut, hlspell, hlsearch, ...
+  //    - each proposes an attr and a length for current char
+  //    - the results are combined; the last one has top priority, unless
+  //    the text is concealed by others
+  // each highlighter keeps its own record for the start of the next
+  // recognition point; if it is called again before this point ... then what ?
+ */
+
+    static void
+_plhlwr_init(_self)
+    void* _self;
+{
+    METHOD(LineHighlightWriter, init);
+    self->_tmpbuf = (char_u*) alloc(sizeof(char_u) * (Columns + 32));
+    self->_tmplimit = self->_tmpbuf + Columns + 16;
+    self->highlighters = NULL;
+}
+
+    static void
+_plhlwr_destroy(_self)
+    void* _self;
+{
+    METHOD(LineHighlightWriter, destroy);
+    vim_free(self->_tmpbuf);
+    self->_tmpbuf = NULL;
+    self->_tmplimit = NULL;
+    self->highlighters = NULL;
+    END_DESTROY(LineHighlightWriter);
+}
+
+    static int
+_plhlwr_flush(_self, text_end, row, col, attr)
+    void* _self;
+    char_u* text_end;
+    int row;
+    int col;
+    int attr;
+{
+    METHOD(LineHighlightWriter, flush);
+    *text_end = NUL;
+    char_u  *st;
+    st = transstr(self->_tmpbuf);
+    if (st)
+    {
+	screen_puts_len(st, (int)STRLEN(st), row, col, attr);
+	col = vim_strsize(st);
+	vim_free(st);
+    }
+    return col; /* number of columns written */
+}
+
+    static int
+_plhlwr_write_line(_self, text, row, init_attr, fillChar)
+    void* _self;
+    char_u* text;
+    int row;
+    int init_attr;
+    int fillChar;
+{
+    METHOD(LineHighlightWriter, write_line);
+    char_u *p, *s;
+    int pwidth, w, col, endcol, max_pwidth, attr, next_attr;
+    Highlighter_T *phl;
+    char_u *ptmp, *ptmplimit;
+
+    if (!text)
+	text = blankline;
+    ptmp = self->_tmpbuf;
+    ptmplimit = self->_tmplimit;
+    max_pwidth = self->offset + self->max_col - self->min_col + 1;
+    next_attr = init_attr;
+
+    phl = self->highlighters;
+    while (phl)
+    {
+	if (phl->active)
+	{
+	    phl->default_attr = init_attr;
+	    phl->op->bol_init(phl, NULL);
+	}
+	phl = phl->next;
+    }
+
+    p = text;		    /* current character */
+    pwidth = 0;		    /* total display width including current character */
+    col = self->min_col;    /* write position */
+
+    while (p != NULL && *p != NUL && pwidth < max_pwidth)
+    {
+	attr = next_attr;
+	s = NULL; /* contig part start */
+	/* collect into tmp */
+	for ( ; ; )
+	{
+	    if (! self->highlighters)
+	    {
+		if (*p == TAB)
+		    w = self->op->get_tab_size_at(self, pwidth);
+		else
+		    w = ptr2cells(p);
+	    }
+	    else
+	    {
+		phl = self->highlighters;
+		w = -1;
+		next_attr = init_attr;
+		while (phl)
+		{
+		    if (phl->active && phl->op->calc_attr(phl, p))
+		    {
+			w = phl->text_width;
+			next_attr = phl->text_attr;
+			if (w == 0)
+			    break;
+		    }
+		    phl = phl->next;
+		}
+
+		if (w < 0)
+		{
+		    if (*p == TAB)
+			w = self->op->get_tab_size_at(self, pwidth);
+		    else
+			w = ptr2cells(p);
+		}
+		else if (w > 0 && *p == TAB)
+		    w = self->op->get_tab_size_at(self, pwidth);
+
+		if (next_attr != attr)
+		{
+		    if (s)
+		    {
+			col += self->op->flush(self, s, row, col, attr);
+			s = NULL;
+		    }
+		    attr =next_attr;
+		}
+	    }
+
+	    if (w == 0)
+	    {
+		mb_ptr_adv(p);
+		continue;
+	    }
+
+	    pwidth += w;
+	    if (pwidth <= self->offset)
+	    {
+		if (*p == NUL) break;
+		else
+		{
+		   mb_ptr_adv(p);
+		   continue;
+		}
+	    }
+	    if (s == NULL)
+	    {
+		int dfirst = pwidth - self->offset; /* visible width of first char */
+		s = ptmp;
+		if (dfirst < w)
+		{
+		    /* character partly visible -- output spaces */
+		    memset(s, ' ', dfirst);
+		    s += dfirst;
+		    mb_ptr_adv(p);
+		    continue;
+		}
+	    }
+	    if (*p == NUL || pwidth > max_pwidth)
+		break;
+	    else if (*p == TAB)
+	    {
+		memset(s, ' ', w); /* XXX: we could implement sth. like 'set list' */
+		s += w;
+		mb_ptr_adv(p);
+	    }
+	    else
+		MB_COPY_CHAR(p, s);
+
+	    if (s > ptmplimit)
+	       	break;
+	}
+
+	/* output */
+	if (s)
+	{
+	    col += self->op->flush(self, s, row, col, attr);
+	    s = NULL;
+	}
+    }
+    if (col <= self->max_col && fillChar != NUL)
+	screen_fill(row, row + 1, col, self->max_col+1, fillChar, fillChar, init_attr);
 }

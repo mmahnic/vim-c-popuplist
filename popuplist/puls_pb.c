@@ -37,14 +37,20 @@
   {
     char	sorted_by;
     int		show_unlisted;
+    list_T*	mru_list;
     void	init();
     void	destroy();
     void	read_options(dict_T* options);
+    void	on_start();
+    void	default_keymap(PopupList* puls);
     void	list_buffers();
     int		sort_buffers();
     char_u*	get_title();
-    char_u*	handle_command(PopupList* puls, char_u* command, dict_T* status);
-    void	default_keymap(PopupList* puls);
+    int		_index_to_bufnr(int index);
+    // update the status dictionary which will be sent to a VimL callback
+    // function or the the caller script on 'accept'
+    void	update_result(dict_T* status);
+    char_u*	handle_command(PopupList* puls, char_u* command);
   };
 */
 
@@ -55,6 +61,7 @@ _bprov_init(_self)
     METHOD(BufferItemProvider, init);
     self->sorted_by = BUFSORT_NR;
     self->show_unlisted = 0;
+    self->mru_list = NULL;
 }
 
     static void
@@ -101,9 +108,25 @@ _bprov_read_options(_self, options)
     if (option && option->di_tv.v_type == VAR_STRING)
     {
 	self->sorted_by = *option->di_tv.vval.v_string;
+	LOG(("BufferItemProvider sort option %c", self->sorted_by));
+    }
+
+    option = dict_find(options, "mru-list", -1L);
+    if (option && option->di_tv.v_type == VAR_LIST)
+    {
+	self->mru_list = option->di_tv.vval.v_list;
     }
 }
 
+    static void
+_bprov_on_start(_self)
+    void* _self;
+{
+    METHOD(BufferItemProvider, on_start);
+    LOG(("BufferItemProvider on_start"));
+    if (self->sorted_by != BUFSORT_NR)
+	self->op->sort_buffers(self);
+}
 
     static void
 _bprov_list_buffers(_self)
@@ -160,8 +183,8 @@ _bprov_list_buffers(_self)
 		buf->b_ml.ml_mfp == NULL ? ' ' :
 			(buf->b_nwindows == 0 ? 'h' : 'a'),
 		!buf->b_p_ma ? '-' : (buf->b_p_ro ? '=' : ' '),
-		(buf->b_flags & BF_READERR) ? 'x'
-					    : (bufIsChanged(buf) ? '+' : ' '),
+		(buf->b_flags & BF_READERR) ? 'x' :
+			(bufIsChanged(buf) ? '+' : ' '),
 		fname,
 		dirname);
 
@@ -181,24 +204,64 @@ _bprov_list_buffers(_self)
     }
 }
 
-   static int
-_BufferItem_cmp_nr(a, b) /* PopupItemCompare_Fn */
+    static int
+_BufferItem_cmp_nr(comparator, a, b)
+    void* comparator;
     PopupItem_T* a;
     PopupItem_T* b;
 {
     if ( ((buf_T*)a->data)->b_fnum < ((buf_T*)b->data)->b_fnum )
-	return LT_SORT_UP;
+	return -1;
     if ( ((buf_T*)a->data)->b_fnum > ((buf_T*)b->data)->b_fnum )
-	return GT_SORT_UP;
+	return 1;
     return 0;
 }
 
-   static int
-_BufferItem_cmp_path(a, b) /* PopupItemCompare_Fn */
+    static int
+_BufferItem_cmp_path(comparator, a, b)
+    void* comparator;
     PopupItem_T* a;
     PopupItem_T* b;
 {
     return STRCMP_SORT_UP * STRCMP( ((buf_T*)a->data)->b_ffname, ((buf_T*)b->data)->b_ffname );
+}
+
+
+    static int
+_BufferItem_cmp_filter_score(comparator, a, b)
+    void* comparator;
+    PopupItem_T* a;
+    PopupItem_T* b;
+{
+    if (a->filter_score < b->filter_score)
+	return -1;
+    if (a->filter_score > b->filter_score)
+	return 1;
+    /* sort items with equal scores by bufnr */
+    if ( ((buf_T*)a->data)->b_fnum < ((buf_T*)b->data)->b_fnum )
+	return -1;
+    if ( ((buf_T*)a->data)->b_fnum > ((buf_T*)b->data)->b_fnum )
+	return 1;
+    return 0;
+}
+
+typedef struct _pulspb_bufnr_order_s_
+{
+    int bufnr;
+    ushort mru_order;
+} _pulspb_bufnr_order_T;
+
+    static int
+_PulsPb_MruOrderCmp_bufnr(comparator, a, b)
+    void* comparator;
+    _pulspb_bufnr_order_T* a;
+    _pulspb_bufnr_order_T* b;
+{
+    if (a->bufnr < b->bufnr)
+	return -1;
+    if (a->bufnr > b->bufnr)
+	return 1;
+    return 0;
 }
 
     static int
@@ -206,32 +269,151 @@ _bprov_sort_buffers(_self)
     void* _self;
 {
     METHOD(BufferItemProvider, sort_buffers);
+    SegmentedGrowArray_T order;
+    SegmentedArrayIterator_T itbufs, itorder;
+    ItemComparator_T cmp;
+    listitem_T* plit;
+    ushort i;
+    _pulspb_bufnr_order_T* pord;
+    PopupItem_T* ppit;
+    init_ItemComparator(&cmp);
+
+    LOG(("BufferItemProvider sort_buffers"));
 
     switch (self->sorted_by)
     {
 	case BUFSORT_NR:
-	    return self->op->sort_items(self, _BufferItem_cmp_nr);
+	    cmp.fn_compare = &_BufferItem_cmp_nr;
+	    return self->op->sort_items(self, &cmp);
 	case BUFSORT_PATH:
-	    return self->op->sort_items(self, _BufferItem_cmp_path);
+	    cmp.fn_compare = &_BufferItem_cmp_path;
+	    return self->op->sort_items(self, &cmp);
 	case BUFSORT_NAME:
-	    return self->op->sort_items(self, _BufferItem_cmp_path); /* TODO: _name */
+	    cmp.fn_compare = &_BufferItem_cmp_path;
+	    return self->op->sort_items(self, &cmp); /* TODO: _name */
 	case BUFSORT_EXT:
-	    return self->op->sort_items(self, _BufferItem_cmp_path); /* TODO: _ext */
+	    cmp.fn_compare = &_BufferItem_cmp_path;
+	    return self->op->sort_items(self, &cmp); /* TODO: _ext */
 	case BUFSORT_MRU:
-	    return self->op->sort_items(self, _BufferItem_cmp_nr); /* TODO: _mru */
+	    LOG(("BufferItemProvider BUFSORT_MRU"));
+	    if (self->mru_list)
+	    {
+		/* 1. sort by bufnr */
+		cmp.fn_compare = &_BufferItem_cmp_nr;
+		if (self->op->sort_items(self, &cmp))
+		{
+		    /* 2. sort the MRU list by bufnr, but remember the MRU position */
+		    init_SegmentedGrowArray(&order);
+		    order.item_size = sizeof(_pulspb_bufnr_order_T);
+		    plit = self->mru_list->lv_first;
+		    i = 0;
+		    while (plit && i < 65000)
+		    {
+			if (plit->li_tv.v_type == VAR_NUMBER)
+			{
+			    pord = (_pulspb_bufnr_order_T*) order.op->get_new_item(&order);
+			    pord->bufnr = plit->li_tv.vval.v_number;
+			    pord->mru_order = i;
+			    ++i;
+			}
+			plit = plit->li_next;
+		    }
+		    cmp.fn_compare = &_PulsPb_MruOrderCmp_bufnr;
+		    order.op->sort(&order, &cmp);
+
+		    /* 3. Assign mru_order to buffer items; use filter_score for that. */
+		    init_SegmentedArrayIterator(&itbufs);
+		    ppit = itbufs.op->begin(&itbufs, self->items);
+		    init_SegmentedArrayIterator(&itorder);
+		    pord = itorder.op->begin(&itorder, &order);
+		    while (1)
+		    {
+			while(ppit && (!pord || ((buf_T*)ppit->data)->b_fnum < pord->bufnr))
+			{
+			    ppit->filter_score = 65111; /* not in mru => last */
+			    ppit = itbufs.op->next(&itbufs);
+			}
+				
+			if (!ppit)
+			    break;
+
+			while(pord && pord->bufnr < ((buf_T*)ppit->data)->b_fnum)
+			    pord = itorder.op->next(&itorder);
+
+			while(ppit && pord && pord->bufnr == ((buf_T*)ppit->data)->b_fnum)
+			{
+			    ppit->filter_score = pord->mru_order;
+			    ppit = itbufs.op->next(&itbufs);
+			    pord = itorder.op->next(&itorder);
+			}
+		    }
+		    order.op->destroy(&order);
+
+		    /* 4. Sort buffers by filter_score (ie. MRU order) */
+		    cmp.fn_compare = &_BufferItem_cmp_filter_score;
+		    return self->op->sort_items(self, &cmp);
+		}
+	    }
+	    return 0;
     }
 
     /* unknown sort mode -> sort by number */
     self->sorted_by = BUFSORT_NR;
-    return self->op->sort_items(self, _BufferItem_cmp_nr);
+    cmp.fn_compare = &_BufferItem_cmp_nr;
+    return self->op->sort_items(self, &cmp);
 }
 
+    static int
+_bprov__index_to_bufnr(_self, index)
+    void*   _self;
+    int	    index;
+{
+    METHOD(BufferItemProvider, _index_to_bufnr);
+    PopupItem_T* pit;
+    buf_T* pbuf;
+    pit = self->op->get_item(self, index);
+    if (pit && pit->data)
+    {
+	pbuf = (buf_T*) pit->data;
+	return pbuf->b_fnum;
+    }
+    return -1;
+}
+
+    static void
+_bprov_update_result(_self, status)
+    void*	_self;
+    dict_T*	status;
+{
+    METHOD(BufferItemProvider, update_result);
+    dictitem_T* pdi;
+
+    /* convert index to bufnr */
+    /* XXX: maybe it would be better to create current-buf and marked-buf */
+    pdi = dict_find(status, "current", -1L);
+    if (pdi && pdi->di_tv.v_type == VAR_NUMBER)
+	pdi->di_tv.vval.v_number = self->op->_index_to_bufnr(self, (int)pdi->di_tv.vval.v_number);
+
+    pdi = dict_find(status, "marked", -1L);
+    if (pdi && pdi->di_tv.v_type == VAR_LIST && pdi->di_tv.vval.v_list)
+    {
+	list_T* l = pdi->di_tv.vval.v_list;
+	listitem_T *pitem = l->lv_first;
+	while (pitem != NULL)
+	{
+	    if (pitem->li_tv.v_type == VAR_NUMBER)
+		pitem->li_tv.vval.v_number = self->op->_index_to_bufnr(self, (int)pitem->li_tv.vval.v_number);
+	    pitem = pitem->li_next;
+	}
+    }
+}
+
+
     static char_u*
-_bprov_handle_command(_self, puls, command, status)
+_bprov_handle_command(_self, puls, command)
     void*	    _self;
     PopupList_T*    puls;
     char_u*	    command;
-    dict_T*	    status;
 {
     METHOD(BufferItemProvider, handle_command);
 
@@ -258,9 +440,9 @@ _bprov_handle_command(_self, puls, command, status)
 		puls->need_redraw |= PULS_REDRAW_ALL;
 	}
     }
-    else if (EQUALS(command, "buf-delete") || EQUALS(command, "buf-wipeout"))
+    else if (EQUALS(command, "buf-delete") || EQUALS(command, "buf-wipeout") || EQUALS(command, "buf-unload"))
     {
-	char cbuf[32];
+	char cbuf[32]; /* XXX: remove from stack */
 	PopupItem_T* pit = self->op->get_item(self, puls->current);
 	if (pit)
 	{
@@ -282,7 +464,7 @@ _bprov_handle_command(_self, puls, command, status)
     }
     else
     {
-	return super(BufferItemProvider, handle_command)(self, puls, command, status);
+	return super(BufferItemProvider, handle_command)(self, puls, command);
     }
 
     return NULL;
@@ -298,6 +480,7 @@ _bprov_default_keymap(_self, puls)
 
     modemap = puls->km_normal;
     modemap->op->set_key(modemap, "xd", "buf-delete");
+    modemap->op->set_key(modemap, "xu", "buf-unload");
     modemap->op->set_key(modemap, "xw", "buf-wipeout");
     modemap->op->set_key(modemap, "ob", "buf-sort-bufnr");
     modemap->op->set_key(modemap, "on", "buf-sort-name");
