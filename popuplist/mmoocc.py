@@ -5,10 +5,12 @@
 #    - creates typedefs for structs and classes
 #    - creates "virtual" function tables for classes
 #    - class instances have a pointer op to their virtual function tables
-#    - struct instances contain only data, but can be inherited from other structs
-#      so that the fields of the base struct are at the beginning of the derived struct;
+#    - struct instances contain only data and no vf tables, but can be inherited
+#      from other structs so that the fields of the base struct are at the
+#      beginning of the derived struct;
 #    - creates skeletons for methods of structs and classes
 #    - creates a function that initializes the virtual tables
+#    - creates initialization code for non-pointer members (of known types)
 #
 # Author: Marko Mahnič
 # Created: March 2011
@@ -30,6 +32,7 @@ classes = []  # will be converted to structs
 consts  = []  # will be converted to #define-s
 read_order = []
 DEBUG = False
+STATIC_VT_INIT = True
 
 def find_class(name):
     global classes
@@ -37,6 +40,35 @@ def find_class(name):
         if c.name == name:
             return c
     return None
+
+def normalize_decl(decl):
+    decl = decl.replace("*", "* ").split()
+    ps = []
+    prev = ""
+    for tok in decl:
+        if tok.startswith("*"):
+            prev += tok
+        else:
+            if len(prev): ps.append(prev)
+            prev = tok
+    if len(prev): ps.append(prev)
+    return " ".join(ps)
+
+# Replace class types in declarations (parameters, members, return values)
+def replace_known_type(decl, replace_cb):
+    ps = normalize_decl(decl).split()
+    param = []
+    for tok in ps:
+        ptr = 0
+        while tok.endswith("*"):
+            tok = tok[:-1]
+            ptr += 1
+        c = find_class(tok)
+        if c != None:
+            tok = replace_cb(c)
+        tok += ("*" * ptr)
+        param.append(tok)
+    return " ".join(param)
 
 fout = None
 indent = 0
@@ -74,23 +106,34 @@ class CMember:
         self.name = name.strip()
         self.type = type.strip()
         self.array = array
+        self.is_array = False     # array(class) types are treated specially
+        self.np_class = None      # a non-pointer member of a known class
+
+    # called after all things are parsed
+    def resolve_type(self):
+        # check if it's an array
+        amo = rxarray.match(self.type)
+        if amo != None:
+            self.is_array = True
+            itm = amo.group(1).strip()
+            c = find_class(itm)
+            if c != None: self.array_type = c.object_type
+            else: self.array_type = itm
+
+        # check if it's a non-pointer member of a known class
+        parts = normalize_decl(self.type).split()
+        for tok in parts:
+            if tok.endswith("*"): continue
+            c = find_class(tok)
+            if c != None:
+                self.np_class = c
+                break
+
 
     @property
     def declaration_type(self):
-        ps = self.type.split()
-        mtype = []
-        for tok in ps:
-            ptr = 0
-            while tok.endswith("*"):
-                tok = tok[:-1]
-                ptr += 1
-            c = find_class(tok)
-            if c != None:
-                tok = "struct %s" % c.object_struct
-            tok += ("*" * ptr)
-            mtype.append(tok)
-        return " ".join(mtype)
-
+        p = replace_known_type(self.type, lambda c:  "struct %s" % c.object_struct)
+        return p
 
 class CMethod:
     def __init__(self, name, result, params):
@@ -100,44 +143,33 @@ class CMethod:
         else:
             self.params = [ p.strip() for p in params.split(",") ]
 
+    def __repr__(self):
+        return "<Method %s>" % self.name
+
+    @property
+    def declaration_type(self):
+        return replace_known_type(self.result, lambda c: "struct %s" % c.object_struct)
+
     @property
     def declaration_args(self):
         args = []
         # Expand known class and struct names to forward-declared names
         for p in self.params:
-            ps = p.split()
-            param = []
-            for tok in ps:
-                ptr = 0
-                while tok.endswith("*"):
-                    tok = tok[:-1]
-                    ptr += 1
-                c = find_class(tok)
-                if c != None:
-                    tok = "struct %s" % c.object_struct
-                tok += ("*" * ptr)
-                param.append(tok)
-            args.append(" ".join(param))
+            p = replace_known_type(p, lambda c:  "struct %s" % c.object_struct)
+            args.append(p)
         return args
+
+    @property
+    def body_type(self):
+        return replace_known_type(self.result, lambda c: "%s" % c.object_type)
 
     @property
     def body_args(self):
         args = []
         # Expand known class and struct names to typedef-ed names
         for p in self.params:
-            ps = p.split()
-            param = []
-            for tok in ps:
-                ptr = 0
-                while tok.endswith("*"):
-                    tok = tok[:-1]
-                    ptr += 1
-                c = find_class(tok)
-                if c != None:
-                    tok = "%s" % c.object_type
-                tok += ("*" * ptr)
-                param.append(tok)
-            args.append(" ".join(param))
+            p = replace_known_type(p, lambda c:  "%s" % c.object_type)
+            args.append(p)
         return args
 
 
@@ -154,6 +186,9 @@ class CClass(object):
         self.methods = []
         self.thisname = "self"
         self.vtable_ptr = "op"
+
+    def __repr__(self):
+        return "<Class %s>" % self.name
 
     def _parse_options(self, options):
         iopts = 0
@@ -212,6 +247,12 @@ class CClass(object):
 
         print "%s: Unknown base class %s" % (self.name, self.baseClass)
 
+    # called after all things are parsed
+    def resolve_types(self):
+        self.resolve_base()
+        for m in self.members:
+            m.resolve_type()
+
     def dump_forward_decl(self):
         if self.variant:
             writeln("#ifdef %s" % self.variant)
@@ -223,9 +264,7 @@ class CClass(object):
         if self.baseClass != None:
             self.baseClass.dump_members()
         for m in self.members:
-            typ = m.type
-            amo = rxarray.match(typ)
-            if amo != None: typ = "garray_T"
+            if m.is_array: typ = "garray_T"
             else: typ = m.declaration_type
             writeln("%s %s%s;" % (typ, m.name, m.array if m.array != None else ""))
 
@@ -242,7 +281,7 @@ class CClass(object):
             params = ["%s* _%s" % (thistype, self.thisname)] + m.declaration_args
             params = [p.strip() for p in params if p.strip() != ""]
             params = ", ".join(params)
-            writeln("%s (*%s)(%s);" % (m.result, m.name, params))
+            writeln("%s (*%s)(%s);" % (m.declaration_type, m.name, params))
 
     def dump_method_decls(self):
         thistype = "/*%s*/void" % self.object_type
@@ -250,8 +289,29 @@ class CClass(object):
             params = ["%s* _%s" % (thistype, self.thisname)] + m.declaration_args
             params = [p.strip() for p in params if p.strip() != ""]
             params = ", ".join(params)
-            writeln("static %s %s __ARGS((%s));" % (m.result, self.method_name(m.name), params))
+            writeln("static %s %s __ARGS((%s));" % (m.declaration_type, self.method_name(m.name), params))
 
+    def get_vt_methods(self):
+        methods = [] # list of [method, class]
+        if self.baseClass:
+            methods += self.baseClass.get_vt_methods()
+        for m in self.methods:
+            found = False
+            for pair in methods:
+                if pair[0].name == m.name: # method override
+                    pair[1] = self
+                    found = True
+            if not found:
+                methods.append([m, self])
+        return methods
+
+    def dump_vtable_static_init(self):
+        writeln("static %s %s = {" % (self.class_type, self.class_vtable))
+        vt = self.get_vt_methods()
+        for pair in vt:
+            if pair[0].name == "init": continue
+            writeln("&%s," % (pair[1].method_name(pair[0].name)))
+        writeln("};")
 
     def dump_vtable_init(self):
         writeln("static %s %s;" % (self.class_type, self.class_vtable))
@@ -278,27 +338,29 @@ class CClass(object):
                 writeln("    %s(_%s);\\" % (base.method_name("init"), base.thisname));
         if set_vtable and self.vtable_ptr != None:
             writeln("    self->%s = &%s;\\" % (self.vtable_ptr, self.class_vtable));
+        # TODO: construct non-pointer structures
         for m in self.members:
-            typ = m.type
-            amo = rxarray.match(typ)
-            if amo == None: continue;
-            itm = amo.group(1).strip()
-            c = find_class(itm)
-            if c != None: itm = c.object_type
-            writeln("    ga_init2(&%s->%s, sizeof(%s), 128);\\" % (self.thisname, m.name, itm))
+            if m.is_array:
+                writeln("    ga_init2(&%s->%s, sizeof(%s), 128);\\" % (self.thisname, m.name, m.array_type))
+            if m.np_class != None:
+                c = m.np_class.find_methods_super_class("init")
+                if c != None:
+                    writeln("    /* INIT %s %s */\\" % (m.name, m.np_class.name))
+                    writeln("    %s(&self->%s);\\" % (c.method_name("init"), m.name));
 
 
     def dump_destructor(self):
         writeln("") # end _BODY
         writeln("#define _%s_DESTROY() \\" % self.name)
+        # TODO: destroy non-pointer structures
         for m in self.members:
-            typ = m.type
-            amo = rxarray.match(typ)
-            if amo == None: continue;
-            itm = amo.group(1).strip()
-            c = find_class(itm)
-            if c != None: itm = c.object_type
-            writeln("    ga_clear(&%s->%s);\\" % (self.thisname, m.name))
+            if m.is_array:
+                writeln("    ga_clear(&%s->%s);\\" % (self.thisname, m.name))
+            if m.np_class != None:
+                c = m.np_class.find_methods_super_class("destroy")
+                if c != None:
+                    writeln("    /* DESTROY %s %s */\\" % (m.name, m.np_class.name))
+                    writeln("    %s(&self->%s);\\" % (c.method_name("destroy"), m.name));
         if self.baseClass != None:
             base = self.baseClass.find_methods_super_class("destroy")
             if base != None:
@@ -317,6 +379,7 @@ class CClass(object):
     def dump_method_bodies(self):
         if self.variant:
             writeln("#ifdef %s" % self.variant)
+
         thistype = "void" # % self.object_type
         for m in self.methods:
             params = ["%s* _%s" % (thistype, self.thisname)] + m.body_args
@@ -338,7 +401,7 @@ class CClass(object):
             if m.name == "destroy": self.dump_destructor()
 
             writeln("\n/*-")
-            writeln("    static %s\n%s(%s)" % (m.result, self.method_name(m.name), args))
+            writeln("    static %s\n%s(%s)" % (m.body_type, self.method_name(m.name), args))
             for p in params:
                 writeln("    %s;" % p)
             writeln("{")
@@ -369,16 +432,17 @@ class CClass(object):
         writeln("")
 
     def dump(self):
-        # structures
         base = ("(%s)" % self.baseClass.name) if self.baseClass != None else ""
         writeln("/* ########## class %s%s ########## */" % (self.name, base))
+
+        # structures
         if self.variant:
             writeln("#ifdef %s" % self.variant)
         writeln("typedef struct %s {" % self.class_struct)
         self.dump_method_ptrs()
         writeln("} %s;" % self.class_type)
-        writeln("")
 
+        writeln("")
         writeln("typedef struct %s {" % self.object_struct)
         writeln("%s* %s;" % (self.class_type, self.vtable_ptr))
         self.dump_members()
@@ -389,7 +453,17 @@ class CClass(object):
         self.dump_method_decls()
         writeln("")
 
-        self.dump_vtable_init()
+        # initialization
+        if STATIC_VT_INIT:
+            self.dump_vtable_static_init()
+        else:
+            self.dump_vtable_init()
+
+        found = self.find_methods_super_class("init")
+        if found:
+            writeln("#define init_%s(pvar) \\" % self.name)
+            writeln("    _%s_init(pvar)" % found.fn_prefix)
+
         if self.variant:
             writeln("#endif /* %s */" % self.variant)
         writeln("")
@@ -419,6 +493,11 @@ class CStruct(CClass):
 
         # method headers
         self.dump_method_decls()
+
+        if self.hasMethod("init"):
+            writeln("#define init_%s(pvar) \\" % self.name)
+            writeln("    _%s_init(pvar)" % self.fn_prefix)
+
         if self.variant:
             writeln("#endif /* %s */" % self.variant)
         writeln("")
@@ -534,8 +613,10 @@ if len(sys.argv) > 1 and sys.argv[1] == '--debug':
     print "Debug"
     DEBUG = True
 
-lines =  open("popuplst.c", "r").readlines()
+lines =  open("puls_st.c", "r").readlines()
+lines += open("popuplst.c", "r").readlines()
 lines += open("puls_pb.c", "r").readlines()
+lines += open("puls_pm.c", "r").readlines()
 lines += open("puls_tw.c", "r").readlines()
 
 fout  = open("popupls_.ci", "w")
@@ -551,7 +632,7 @@ while i < len(lines):
     i += 1
 
 for c in classes:
-    c.resolve_base()
+    c.resolve_types()
 
 for c in consts:
     c.dump()
@@ -566,22 +647,23 @@ for c in classes:
     c.dump()
     dump_typedefs(c)
 
-writeln("    static int")
-writeln("_init_vtables()")
-writeln("{")
-writeln("static int inited = 0;")
-writeln("if (inited)")
-writeln("    return 0;")
-for c in classes:
-    if c.vtable_ptr == None: continue
-    if c.variant:
-        writeln("#ifdef %s" % c.variant)
-    writeln("_vtinit_%s(&%s);" % (c.name, c.class_vtable))
-    if c.variant:
-        writeln("#endif")
-writeln("inited = 1;")
-writeln("return 1;")
-writeln("}")
+if not STATIC_VT_INIT:
+    writeln("    static int")
+    writeln("_init_vtables()")
+    writeln("{")
+    writeln("static int inited = 0;")
+    writeln("if (inited)")
+    writeln("    return 0;")
+    for c in classes:
+        if c.vtable_ptr == None: continue
+        if c.variant:
+            writeln("#ifdef %s" % c.variant)
+        writeln("_vtinit_%s(&%s);" % (c.name, c.class_vtable))
+        if c.variant:
+            writeln("#endif")
+    writeln("inited = 1;")
+    writeln("return 1;")
+    writeln("}")
 
 # XXX: CAST_CLASS depends on CClass.thisname
 if DEBUG:

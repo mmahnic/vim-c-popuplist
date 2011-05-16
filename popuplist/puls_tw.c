@@ -223,16 +223,16 @@ _plwr_write_line(_self, text, row, attr, fillChar)
   // It may hide some characters, it may add new ones.
   class Highlighter [hltr]
   {
-    Highlighter* next;    // chained highlighters
-    int	    active;
-    int	    state;
-    int	    default_attr;
-    int	    text_attr;	// attribute starting at next_char
-    int	    text_width;	// width of text processed
-    char_u* match_end;
+    Highlighter* next;	    // chained highlighters
+    int	    active;	    // when 0 this highlighter won't be used
+    int	    state;	    // a highlighter could be a state machine
+    int	    default_attr;   // the 'normal' text attribute
+    int	    text_attr;	    // attribute starting at next_char
+    int	    text_width;	    // width of text processed
+    char_u* match_end;	    // the attrubutes remain unchanged until match_end
     void    init();
     void    destroy();
-    void    bol_init(void* extra_data);
+    void    bol_init(char_u* text, void* extra_data);
 
     // Intended use of match_end in calc_attr:
     //    if (self->match_end >= next_char) return 1;
@@ -245,27 +245,6 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     int	    calc_attr(char_u* next_char);
   };
 
-  // Highlights shortcuts that start with the '&' symbol; '&' is removed.
-  // TODO: a new state for auto-assigned shortcuts; the shortcut is assigned to an item
-  // as the offset from the start of the item. In state '3', the ShortcutHighlighter
-  // writes a new attribute at that offset. A negative offset means: use only '&'.
-  class ShortcutHighlighter(Highlighter) [hlshrt]
-  {
-    int	    shortcut_attr;
-    void    init();
-    int	    calc_attr(char_u* next_char);
-  };
-
-  class ISearchHighlighter(Highlighter) [hlisrc]
-  {
-    int	    match_attr;
-    char_u* pattern;
-    int     patt_len;
-    void    init();
-    void    destroy();
-    int	    calc_attr(char_u* next_char);
-    void    set_pattern(char_u* pattern);
-  };
 */
 
     static void
@@ -291,8 +270,9 @@ _hltr_destroy(_self)
 }
 
     static void
-_hltr_bol_init(_self, extra_data)
+_hltr_bol_init(_self, text, extra_data)
     void* _self;
+    char_u* text;
     void* extra_data;
 {
     METHOD(Highlighter, bol_init);
@@ -310,6 +290,20 @@ _hltr_calc_attr(_self, next_char)
     METHOD(Highlighter, calc_attr);
     return 1;
 }
+
+/* [ooc]
+ *
+  // Highlights shortcuts that start with the '&' symbol; '&' is removed.
+  // TODO: a new state for auto-assigned shortcuts; the shortcut is assigned to an item
+  // as the offset from the start of the item. In state '3', the ShortcutHighlighter
+  // writes a new attribute at that offset. A negative offset means: use only '&'.
+  class ShortcutHighlighter(Highlighter) [hlshrt]
+  {
+    int	    shortcut_attr;
+    void    init();
+    int	    calc_attr(char_u* next_char);
+  };
+*/
 
     static void
 _hlshrt_init(_self)
@@ -358,6 +352,20 @@ _hlshrt_calc_attr(_self, next_char)
     return rv;
 }
 
+/* [ooc]
+ *
+  class ISearchHighlighter(Highlighter) [hlisrc]
+  {
+    int	    match_attr;
+    char_u* pattern;
+    int     patt_len;
+    void    init();
+    void    destroy();
+    int	    calc_attr(char_u* next_char);
+    void    set_pattern(char_u* pattern);
+  };
+*/
+
     static void
 _hlisrc_init(_self)
     void* _self;
@@ -401,7 +409,7 @@ _hlisrc_calc_attr(_self, next_char)
 
     if (0 == STRNCMP(next_char, self->pattern, self->patt_len)) /* TODO: support regex */
     {
-	self->text_attr = _puls_hl_attrs[PULSATTR_SELECTED].attr;
+	self->text_attr = self->match_attr;
 	self->match_end = next_char + self->patt_len - 1; /* TODO: match length */
 	return 1;
     }
@@ -413,6 +421,93 @@ _hlisrc_calc_attr(_self, next_char)
     return 0;
 }
 
+/* [ooc]
+ *
+  class TextMatchHighlighter(Highlighter) [hltxm]
+  {
+    TextMatcher* matcher;
+    int	    match_attr;
+    char_u* match_start;
+    void    init();
+    void    destroy();
+    void    set_matcher(TextMatcher* matcher);
+    void    bol_init(char_u* text, void* extra_data);
+    int	    calc_attr(char_u* next_char);
+  };
+*/
+
+    static void
+_hltxm_init(_self)
+    void* _self;
+{
+    METHOD(TextMatchHighlighter, init);
+    self->matcher = NULL;
+    self->match_attr = _puls_hl_attrs[PULSATTR_SELECTED].attr;
+}
+
+    static void
+_hltxm_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatchHighlighter, destroy);
+    END_DESTROY(ISearchHighlighter);
+}
+
+    static void
+_hltxm_set_matcher(_self, matcher)
+    void* _self;
+    TextMatcher_T* matcher;
+{
+    METHOD(TextMatchHighlighter, set_matcher);
+    self->matcher = matcher;
+}
+
+    static void
+_hltxm_bol_init(_self, text, extra_data)
+    void* _self;
+    char_u* text;
+    void* extra_data;
+{
+    METHOD(TextMatchHighlighter, bol_init);
+    super(TextMatchHighlighter, bol_init)(self, text, extra_data);
+
+    /* Some matchers (eg. command-t) have to be initialized before they can be
+     * used for highlighting. Note that the string used for filtering may be
+     * different from the string being displayed and the highlighted match may
+     * be different from the actual one.
+     */
+    if (self->matcher)
+	self->matcher->op->init_highlight(self->matcher, text);
+}
+
+    static int
+_hltxm_calc_attr(_self, next_char)
+    void* _self;
+    char_u* next_char;
+{
+    METHOD(TextMatchHighlighter, calc_attr);
+    char_u* pmatch;
+    int len;
+    if (! self->matcher)
+	return 0;
+
+    if (self->match_end >= next_char)
+	return 1;
+
+    len = self->matcher->op->get_match_at(self->matcher, next_char);
+    if (len)
+    {
+	self->text_attr = self->match_attr;
+	self->match_end = next_char + len - 1;
+	return 1;
+    }
+    else
+    {
+	self->text_attr = self->default_attr;
+	self->match_end = next_char;
+    }
+    return 0;
+}
 
 /* [ooc]
  *
@@ -508,7 +603,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 	if (phl->active)
 	{
 	    phl->default_attr = init_attr;
-	    phl->op->bol_init(phl, NULL);
+	    phl->op->bol_init(phl, text, NULL);
 	}
 	phl = phl->next;
     }

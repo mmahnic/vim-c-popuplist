@@ -290,7 +290,7 @@ _update_hl_attrs()
     ushort	flags; // cached; marked; titleitem; ...
     ushort	filter_start;
     ushort	filter_length;
-    ushort	filter_score;
+    ulong	filter_score;
     void	init();
     void	destroy();
   };
@@ -655,11 +655,13 @@ _iprov_sort_items(_self, cmp)
   {
     list_T*	vimlist;
     int		_refcount; // how many times have we referenced the list
+
     // @var skip_leading is the number of characters to skip in the text
     // returned by get_display_text. The leading characters can be used to pass
     // additional information to each item (eg. title, disabled, marked,
     // hierarchical level). At most 2 leading characters can be used.
     int		skip_leading;
+
     void	init();
     void	set_list(list_T* vimlist);
     char_u*	get_display_text(int item);
@@ -675,6 +677,20 @@ _vlprov_init(_self)
     self->vimlist = NULL;
     self->_refcount = 0;
     self->skip_leading = 0;
+}
+
+    static void
+_vlprov_destroy(_self)
+    void* _self;
+{
+    METHOD(VimlistItemProvider, destroy);
+    if (self->vimlist && self->_refcount > 0)
+    {
+	list_unref(self->vimlist);
+	self->vimlist = NULL;
+	self->_refcount = 0;
+    }
+    END_DESTROY(VimlistItemProvider);
 }
 
 /*
@@ -702,7 +718,7 @@ _vlprov_set_list(_self, vimlist)
     self->vimlist = vimlist;
     if (vimlist)
     {
-	++vimlist->lv_refcount <= 0;
+	++vimlist->lv_refcount;
 	self->_refcount = 1;
 
 	listitem_T *pitem = vimlist->lv_first;
@@ -738,20 +754,6 @@ _vlprov_get_display_text(_self, item)
 	if (self->skip_leading > 1 && *text) text++;
     }
     return text;
-}
-
-    static void
-_vlprov_destroy(_self)
-    void* _self;
-{
-    METHOD(VimlistItemProvider, destroy);
-    if (self->vimlist && self->_refcount > 0)
-    {
-	/* TODO: self.vimlist.refcount--; */
-	self->_refcount = 0;
-	self->vimlist = NULL;
-    }
-    END_DESTROY(VimlistItemProvider);
 }
 
 
@@ -1069,6 +1071,439 @@ _isrch_match(_self, haystack)
     return 1;
 }
 
+/* [ooc]
+ *
+  // Used by the ItemFilter to assign a score to every item.
+  // TODO: Used by the highlighter to higlight the matches.
+  class TextMatcher [txm]
+  {
+    char_u* _needle;
+    int	    _need_strlen;
+    ulong   empty_score; // score for empty needle, default is 1
+    void    init();
+    void    destroy();
+
+    void    set_search_str(char_u* needle);
+
+    // @returns the score of the match or 0 when needle is not in haystack
+    ulong   match(char_u* haystack);
+
+    // Init data for the highligter
+    void    init_highlight(char_u* haystack);
+    // @returns the length of the match
+    int     get_match_at(char_u* haystack);
+  };
+ */
+
+    static void
+_txm_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcher, init);
+    self->_needle = NULL;
+    self->_need_strlen = 0;
+    self->empty_score = 1;
+}
+
+    static void
+_txm_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcher, destroy);
+    vim_free(self->_needle);
+    END_DESTROY(TextMatcher);
+}
+
+    static void
+_txm_set_search_str(_self, needle)
+    void*    _self;
+    char_u*  needle;
+{
+    METHOD(TextMatcher, set_search_str);
+
+    if (self->_needle && needle && EQUALS(self->_needle, needle))
+	return;
+
+    vim_free(self->_needle);
+    if (needle && *needle)
+    {
+	self->_needle = vim_strsave(needle);
+	self->_need_strlen = STRLEN(needle);
+    }
+    else
+    {
+	self->_needle = NULL;
+	self->_need_strlen = 0;
+    }
+}
+
+    static ulong
+_txm_match(_self, haystack)
+    void* _self;
+    char_u* haystack;
+    // char_u* needle; TODO: use this instead of self->_needle if provided
+{
+    METHOD(TextMatcher, match);
+    char *p;
+    char_u* needle;
+    ulong score;
+    int d;
+    if (! haystack || ! *haystack)
+	return 0;
+    needle = self->_needle;
+    if (! needle || ! *needle)
+	return self->empty_score;
+
+    p = _stristr(haystack, needle);
+    if (! p)
+	return 0;
+    score = 1;
+    d = p - (char*)haystack;
+    if (d == 0) /* start of text */
+	score += 100;
+    else if (isalnum(*(p-1)) != isalnum(*needle)) /* simplistic start-of-word check */
+	score += 50;
+    /* XXX: option?: better if near the start */
+    /*if (d < 30)*/
+    /*    score += 30 - d;*/
+    /* XXX: option?: sort by first char if same score */
+    /* score = (score + 1) * 256 - *haystack; */
+    return score;
+}
+
+    static void
+_txm_init_highlight(_self, haystack)
+    void*	_self;
+    char_u*	haystack;
+{
+    METHOD(TextMatcher, init_highlight);
+}
+
+    static int
+_txm_get_match_at(_self, haystack)
+    void*	_self;
+    char_u*	haystack;
+{
+    METHOD(TextMatcher, get_match_at);
+    if (! haystack || ! self->_needle || ! *haystack || ! *self->_needle)
+	return 0;
+
+    if (0 == STRNICMP(haystack, self->_needle, self->_need_strlen))
+	return self->_need_strlen;
+
+    return 0;
+}
+
+/* [ooc]
+ *
+  // A text matcher similar to Command-T
+  class TextMatcherCmdT(TextMatcher) [txmcmdt]
+  {
+    // The position up to which we try to improve the score of the match.
+    // -1 : try all possibilities (default)
+    //  0 : accept the firts match
+    //  n : try to improve the score if a matched character is before this point in string
+    int     last_retry_offset;
+
+    // TODO: scores for preceeding special characters
+    // char_u specials[];
+
+    // needle parameters used in search, updated in set_search_str
+    int		_need_len;
+    char_u**	_need_chars;
+    short*	_need_char_lens;
+    char_u**	_hays_positions;
+    char_u**	_hays_best_positions;
+
+    void    init();
+    void    destroy();
+    void    _clear();
+    // TODO:  make matching a 2 step process: set_needle(needle), match(haystack).
+    // A lot of data has to be calculated for needle on every call!
+    void    set_search_str(char_u* needle);
+    ulong   match(char_u* haystack);
+    ulong   _calc_pos_score(char_u* haystack, char_u** positions, int npos);
+    void    init_highlight(char_u* haystack);
+    int     get_match_at(char_u* haystack);
+  };
+ */
+
+    static void
+_txmcmdt_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcherCmdT, init);
+    self->last_retry_offset = -1;
+    self->_need_len = 0;
+    self->_need_chars = NULL;
+    self->_need_char_lens = NULL;
+    self->_hays_positions = NULL;
+    self->_hays_best_positions = NULL;
+}
+
+    static void
+_txmcmdt_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcherCmdT, destroy);
+    self->op->_clear(self);
+    END_DESTROY(TextMatcherCmdT);
+}
+
+    static void
+_txmcmdt__clear(_self)
+    void* _self;
+{
+    METHOD(TextMatcherCmdT, _clear);
+    self->_need_len = 0;
+    vim_free(self->_need_chars);
+    self->_need_chars = NULL;
+    vim_free(self->_need_char_lens);
+    self->_need_char_lens = NULL;
+    vim_free(self->_hays_positions);
+    self->_hays_positions = NULL;
+    vim_free(self->_hays_best_positions);
+    self->_hays_best_positions = NULL;
+}
+
+    static void
+_txmcmdt_set_search_str(_self, needle)
+    void*    _self;
+    char_u*  needle;
+{
+    METHOD(TextMatcherCmdT, set_search_str);
+    char_u *p, *pend;
+    int l;
+
+    if (self->_needle && needle && EQUALS(self->_needle, needle))
+	return;
+
+    self->op->_clear(self);
+    super(TextMatcherCmdT, set_search_str)(self, needle);
+
+    if (!self->_needle)
+	return;
+
+    self->_need_chars = (char_u**) alloc(sizeof(char_u*) * self->_need_strlen);
+    self->_need_char_lens = (short*) alloc(sizeof(short) * self->_need_strlen);
+    p = self->_needle;
+    pend = p + self->_need_strlen;
+    l = 0;
+    while (p < pend)
+    {
+	self->_need_chars[l] = p;
+	self->_need_char_lens[l] = mb_ptr2len(p); /* XXX: combining chars cause problems */
+	p += self->_need_char_lens[l]; /* mb_ptr_adv(p); */
+	++l;
+    }
+    self->_need_len = l;
+    self->_hays_positions = (char_u**) alloc(sizeof(char_u*) * self->_need_len);
+    self->_hays_best_positions = (char_u**) alloc(sizeof(char_u*) * self->_need_len);
+}
+
+    static ulong
+_txmcmdt__calc_pos_score(_self, haystack, positions, npos)
+    void*    _self;
+    char_u*  haystack;
+    char_u** positions;
+    int	     npos;
+{
+    METHOD(TextMatcherCmdT, _calc_pos_score);
+    ulong   score;
+    int	    i, d;
+    char_u  *p;
+    char_u  prevch;
+    /* TODO: this is an option; also add a field with score-per-char; only ascii chars. */
+    static char_u special[] = "/.-_ 0123456789";
+
+    if (npos < 1)
+	return 0;
+
+    score = 0;
+    for (i = 0; i < npos; i++)
+    {
+	p = positions[i];
+	d = p - haystack;
+	if (d < 200)
+	    score += 200 - d;
+	d = p - ( (i == 0) ? haystack : positions[i-1] ); /* not reliable with wide-chars */
+	if (d < 2)
+	    score += 1000;
+	else
+	{
+	    prevch = *(p-1); /* (p == haystack ? ' ' : *(p-1)); */
+	    p = vim_strchr(special, prevch);
+	    if (p)
+		score += 800 - (p - special) * 10;
+	    else
+		score += 1000 / d + 1;
+	}
+
+    }
+    return score;
+}
+
+    static char_u*
+_find_char(text, ch)
+    char_u* text;
+    char_u* ch;
+{
+    /* TODO: handle multibyte; handle case */
+    return vim_strchr(text, *ch);
+}
+
+    static char_u*
+_rfind_char(text, ch)
+    char_u* text;
+    char_u* ch;
+{
+    /* TODO: handle multibyte; handle case */
+    return vim_strrchr(text, *ch);
+}
+
+    static ulong
+_txmcmdt_match(_self, haystack)
+    void* _self;
+    char_u* haystack;
+    // char_u* needle; TODO: use this if provided
+{
+    METHOD(TextMatcherCmdT, match);
+    int		stack_pos;
+    char_u	*first_pos, *last_pos, *last_retry_pos;
+    char_u	*p, *pend;
+    ulong	score, best_score;
+    /* copies of members */
+    int		need_len;
+    char_u**	hays_positions;
+    char_u**	need_chars;
+
+    if (! haystack || ! *haystack)
+	return 0;
+    if (! self->_needle || ! *self->_needle)
+	return self->empty_score;
+
+    need_len = self->_need_len;
+    need_chars = self->_need_chars;
+    hays_positions = self->_hays_positions;
+
+    /* find the limits of the search */
+    first_pos = _find_char(haystack, need_chars[0]);
+    if (! first_pos)
+	return 0;
+
+    last_pos = _rfind_char(first_pos, need_chars[need_len-1]);
+    if (! last_pos || (last_pos - first_pos + self->_need_char_lens[need_len-1]) < self->_need_strlen)
+	return 0; /* too short, a match is not possible */
+
+    last_retry_pos = last_pos + 1; /* retry every possible combination */
+    if (self->last_retry_offset >= 0)
+    {
+	p = haystack + self->last_retry_offset;
+	if (p < last_retry_pos)  /* retry less */
+	    last_retry_pos = p;
+    }
+
+    hays_positions[0] = first_pos;
+    best_score = 0;
+    if (need_len < 2)
+	stack_pos = 0;
+    else
+    {
+	hays_positions[1] = first_pos;
+	mb_ptr_adv(hays_positions[1]);
+	stack_pos = 1;
+    }
+
+    /* find best match */
+    while (stack_pos >= 0)
+    {
+	p = _find_char(hays_positions[stack_pos], need_chars[stack_pos]);
+	if (p > last_pos)
+	    p = NULL;
+	if (! p)
+	{
+	    --stack_pos;
+	    if (stack_pos >= 0)
+		mb_ptr_adv(hays_positions[stack_pos]);
+	    continue;
+	}
+	hays_positions[stack_pos] = p;
+	if (stack_pos < need_len - 1)
+	{
+	    ++stack_pos;
+	    hays_positions[stack_pos] = hays_positions[stack_pos-1];
+	    mb_ptr_adv(hays_positions[stack_pos]);
+	    continue;
+	}
+	else
+	{
+	    /* We have a match so we calculate the score */
+	    score = self->op->_calc_pos_score(self, haystack, hays_positions, need_len);
+	    if (score > best_score)
+	    {
+		best_score = score;
+		memcpy(self->_hays_best_positions, hays_positions, sizeof(char_u*) * need_len);
+	    }
+
+	    /* try to improve the score */
+	    if (self->last_retry_offset < 0)
+	    {
+		/* always retry */
+		mb_ptr_adv(hays_positions[stack_pos]);
+	    }
+	    else
+	    {
+		/* retry only positions that are not past the last_retry_pos */
+		while (stack_pos >= 0 && hays_positions[stack_pos] >= last_retry_pos)
+		    --stack_pos;
+		if (stack_pos >= 0)
+		    mb_ptr_adv(hays_positions[stack_pos]);
+	    }
+	}
+    }
+
+    return best_score;
+}
+
+    static void
+_txmcmdt_init_highlight(_self, haystack)
+    void*	_self;
+    char_u*	haystack;
+{
+    METHOD(TextMatcherCmdT, init_highlight);
+
+    /* find a match to set _hays_positions */
+    self->op->match(self, haystack);
+}
+
+    static int
+_txmcmdt_get_match_at(_self, haystack)
+    void*	_self;
+    char_u*	haystack;
+{
+    METHOD(TextMatcherCmdT, get_match_at);
+    int i, len;
+    char_u**	bestpos = self->_hays_best_positions;
+    if (! bestpos || self->_need_len < 1
+	    || haystack < bestpos[0]
+	    || haystack > bestpos[self->_need_len-1])
+    {
+	return 0;
+    }
+
+    i = 0;
+    while (bestpos[i] + self->_need_char_lens[i] - 1 < haystack)
+	++i;
+    if (bestpos[i] > haystack)
+	return 0;
+    len = self->_need_char_lens[i] - (haystack - bestpos[i]);
+    if (len <= 0)
+	return 0;
+    /* TODO: increase len while _hays_positions[++i] points to next character */
+
+    return len;
+}
+
 /* TODO: filtered items:
  *	- store sorted ranges of visible items
  *	- store count of ranges
@@ -1078,7 +1513,7 @@ _isrch_match(_self, haystack)
  *
  * Operation:
  *    - filter items into index field; a filter gives each item a score
- *    - sort the items by score, use stable sorting so that the item order is preserved within same score
+ *    - (sort the items by score, use stable sorting so that the item order is preserved within same score)
  *    - XXX: what do we do with titles when sorting? User option while puls is visible:
  *	- keep the titles, sort items below titles
  *	- hide titles, sort all items
@@ -1097,13 +1532,13 @@ _isrch_match(_self, haystack)
   {
     ItemProvider* model;
     char_u  text[MAX_FILTER_SIZE + 1];
-    // array(int) items;  // indices of items in the model
+    TextMatcher* matcher;
     SegmentedGrowArray* items; // indices of items in the model
     void    init();
     void    destroy();
+    void    set_matcher(TextMatcher* pmatcher);
     void    set_text(char_u* ptext);
     void    filter_items();
-    int	    match(char_u* needle, char_u* haystack);
     int	    get_item_count();
     int	    get_model_index(int index);
   };
@@ -1140,6 +1575,11 @@ _flcmpscr_compare(_self, pia, pib)
 	return -1;
     if (pa->filter_score < pb->filter_score) return self->reverse ? 1 : -1;
     if (pa->filter_score > pb->filter_score) return self->reverse ? -1 : 1;
+
+    /* Sort items with the same score by the original sorting order; ignore self->reverse */
+    if (*(int*) pia < *(int*) pib) return -1;
+    if (*(int*) pia > *(int*) pib) return 1;
+
     return 0;
 }
 
@@ -1151,6 +1591,7 @@ _iflt_init(_self)
     self->model = NULL;
     self->text[0] = NUL;
     self->items = new_SegmentedGrowArrayP(sizeof(int), NULL);
+    self->matcher = (TextMatcher_T*) new_TextMatcher(); /* start with the default text matcher */
 }
 
     static void
@@ -1160,7 +1601,20 @@ _iflt_destroy(_self)
     METHOD(ItemFilter, destroy);
     self->model = NULL; /* filter doesn't own the model */
     CLASS_DELETE(self->items);
+    CLASS_DELETE(self->matcher);
     END_DESTROY(ItemFilter);
+}
+
+    static void
+_iflt_set_matcher(_self, pmatcher)
+    void* _self;
+    TextMatcher_T* pmatcher;
+{
+    METHOD(ItemFilter, set_matcher);
+    if (pmatcher == self->matcher)
+	return;
+    CLASS_DELETE(self->matcher);
+    self->matcher = pmatcher;
 }
 
     static void
@@ -1177,26 +1631,8 @@ _iflt_set_text(_self, ptext)
 	STRNCPY(self->text, ptext, MAX_FILTER_SIZE);
 	self->text[MAX_FILTER_SIZE] = NUL;
     }
-}
-
-    static int
-_iflt_match(_self, needle, haystack)
-    void* _self;
-    char_u* needle;
-    char_u* haystack;
-{
-    METHOD(ItemFilter, match);
-    char *p;
-    if (! needle || ! *needle)
-	return 1;
-    p = _stristr(haystack, needle);
-    if (! p)
-	return 0;
-    if (p == (char*)haystack) /* start of text */
-	return 100;
-    if (isalnum(*(p-1)) != isalnum(*needle)) /* simplistic start-of-word check */
-	return 10;
-    return 1;
+    if (self->matcher)
+	self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
     static void
@@ -1206,18 +1642,21 @@ _iflt_filter_items(_self)
     METHOD(ItemFilter, filter_items);
 
     PopupItem_T* pit;
+    TextMatcher_T* matcher;
     FltComparator_Score_T cmp;
     int item_count, i;
     int *pmi;
 
     self->items->op->clear(self->items);
-    if (STRLEN(self->text) < 1)
+    if (STRLEN(self->text) < 1 || !self->matcher)
 	return;
 
+    matcher = self->matcher;
+    /*matcher->op->set_search_str(matcher, self->text);*/
     item_count = self->model->op->get_item_count(self->model);
     for(i = 0; i < item_count; i++)
     {
-	int score = self->op->match(self, self->text, self->model->op->get_filter_text(self->model, i));
+	ulong score = matcher->op->match(matcher, self->model->op->get_filter_text(self->model, i));
 	pit = self->model->op->get_item(self->model, i); /* TODO: set-item-score() */
 	if (pit)
 	    pit->filter_score = score;
@@ -1474,7 +1913,7 @@ _bxal_align(_self, box, border)
 
 /* [ooc]
  *
-  enum FindKeyResult { KM_NOTFOUND, KM_PREFIX, KM_MATCH };
+  // enum FindKeyResult { KM_NOTFOUND, KM_PREFIX, KM_MATCH };
   const KM_NOTFOUND = 0;
   const KM_PREFIX   = 1;
   const KM_MATCH    = 2;
@@ -1514,8 +1953,8 @@ _skmap_init(_self)
 {
     METHOD(SimpleKeymap, init);
     self->name = NULL;
-    self->key2cmd = dict_alloc();
     self->has_insert = 0;
+    self->key2cmd = dict_alloc();
     ++self->key2cmd->dv_refcount;
 }
 
@@ -1573,6 +2012,7 @@ _skmap_set_vim_key(_self, sequence, command)
     METHOD(SimpleKeymap, set_vim_key);
     sequence = self->op->encode_key(self, sequence);
     self->op->set_key(self, sequence, command);
+    vim_free(sequence);
 }
 
     static void
@@ -2075,11 +2515,11 @@ _wbor_draw_item_right(_self, line, current)
     BoxAligner*	    aligner;	// positions the list box on the screen
     WindowBorder*   border;
     LineEdit*	    line_edit;
-    ShortcutHighlighter* hl_menu;
-    ISearchHighlighter*  hl_user;   // set in options
-    ISearchHighlighter*  hl_filter; // TODO: depends on the selected filter
-    ISearchHighlighter*  hl_isearch;
-    Highlighter*	 hl_chain;  // chain of highlighters, updated in update_hl_chain()
+    ShortcutHighlighter*    hl_menu;
+    ISearchHighlighter*	    hl_user;   // set in options
+    TextMatchHighlighter*   hl_filter; // TODO: depends on the selected filter
+    ISearchHighlighter*	    hl_isearch;
+    Highlighter*	    hl_chain;  // chain of highlighters, updated in update_hl_chain()
     Box position;	    // position of the items, without the frame
     int current;	    // index of selected item or -1
     int first;		    // index of top item
@@ -2093,6 +2533,7 @@ _wbor_draw_item_right(_self, line, current)
 
     void    init();
     void    destroy();
+    void    set_model(ItemProvider* model);
     void    read_options(dict_T* options);
     void    default_keymap();
     void    map_keys(char_u* kmap_name, dict_T* kmap);
@@ -2117,7 +2558,6 @@ _puls_init(_self)
 {
     METHOD(PopupList, init);
     self->model = NULL;
-    self->filter = NULL;
     self->aligner = NULL;
     self->title = NULL;
     self->first = 0;
@@ -2128,6 +2568,7 @@ _puls_init(_self)
     self->col1_width = 0;
     self->need_redraw = 0;
     self->isearch = new_ISearch();
+    self->filter = new_ItemFilter();
     self->km_normal = new_SimpleKeymap();
     self->km_normal->op->set_name(self->km_normal, "normal"); /* TODO: add parameter: mode_indicator, eg. "/" */
     self->km_filter = new_SimpleKeymap();
@@ -2147,7 +2588,7 @@ _puls_init(_self)
     self->hl_user = NULL;
     self->hl_isearch = new_ISearchHighlighter();
     self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
-    self->hl_filter = new_ISearchHighlighter();
+    self->hl_filter = new_TextMatchHighlighter();
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
     /* TODO: hl_menu should be created only in menu mode */
     self->hl_menu = new_ShortcutHighlighter();
@@ -2160,7 +2601,6 @@ _puls_destroy(_self)
 {
     METHOD(PopupList, destroy);
     self->model = NULL;	    /* puls doesn't own the model */
-    self->filter = NULL;    /* puls doesn't own the filter */
     self->aligner = NULL;   /* puls doesn't own the aligner */
     self->hl_chain = NULL;  /* points to one of the highlighters */
 
@@ -2173,10 +2613,22 @@ _puls_destroy(_self)
     CLASS_DELETE(self->hl_menu);
     CLASS_DELETE(self->hl_isearch);
     CLASS_DELETE(self->hl_filter);
+    CLASS_DELETE(self->filter);
     CLASS_DELETE(self->isearch);
     _str_free(&self->title);
 
     END_DESTROY(PopupList);
+}
+
+    static void
+_puls_set_model(_self, model)
+    void* _self;
+    ItemProvider_T* model;
+{
+    METHOD(PopupList, set_model);
+    self->model = model;
+    if (self->filter)
+	self->filter->model = model;
 }
 
     static void
@@ -2504,7 +2956,7 @@ _puls_update_hl_chain(_self)
     METHOD(PopupList, update_hl_chain);
     ListHelper_T lst_chain;
     init_ListHelper(&lst_chain);
-    lst_chain.first = (void**) &self->hl_chain;
+    lst_chain.first = (void**) &self->hl_chain; /* TODO?: lst_chain.set_list() */
     lst_chain.offs_next = offsetof(Highlighter_T, next);
 
     self->hl_chain = NULL;
@@ -2516,7 +2968,11 @@ _puls_update_hl_chain(_self)
     if (self->hl_menu && self->hl_menu->active)
 	lst_chain.op->add_tail(&lst_chain, self->hl_menu);
 
+    self->hl_filter->op->set_matcher(self->hl_filter, self->filter->matcher);
+    self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
     lst_chain.op->add_tail(&lst_chain, self->hl_filter);
+
+    self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
     lst_chain.op->add_tail(&lst_chain, self->hl_isearch);
 }
 
@@ -2681,8 +3137,11 @@ _puls_on_filter_change(_self, data)
 	self->op->set_current(self, 0);
     self->need_redraw |= PULS_REDRAW_ALL;
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
+
+    /* TODO: verify if using hl_filter->set_matcher(filter->matcher) in update_hl_chain is enough
     if (self->hl_filter)
 	self->hl_filter->op->set_pattern(self->hl_filter, self->filter->text);
+     */
 }
 
     static int
@@ -3219,6 +3678,11 @@ _puls_test_loop(pplist, rettv)
     return rv;
 }
 
+#define INCLUDE_TESTS
+#if defined(INCLUDE_TESTS)
+#include "puls_test.c"
+#endif
+
 /* 
  *    popuplist({items} [, {title} [, {options} ]])
  *
@@ -3257,7 +3721,6 @@ puls_test(argvars, rettv)
 {
     BoxAligner_T* aligner = NULL;
     PopupList_T* pplist = NULL;
-    ItemFilter_T* filter = NULL;
     ItemProvider_T* model = NULL;
     dictitem_T *option, *di;
     DictIterator_T itd;
@@ -3329,6 +3792,14 @@ puls_test(argvars, rettv)
 	    model = (ItemProvider_T*) mmodel;
 	}
 /*#endif*/
+#if defined(INCLUDE_TESTS)
+	static char str_pulslog[] = "pulslog";
+	if (EQUALS(special_items, "test-command-t"))
+	{
+	    _test_command_t();
+	    special_items = str_pulslog;
+	}
+#endif
 	if (EQUALS(special_items, "pulslog"))
 	{
 	    LOG(("PULS LOG"));
@@ -3361,18 +3832,14 @@ puls_test(argvars, rettv)
     aligner = new_BoxAligner();
     aligner->op->set_limits(aligner, 0, 0, Columns - 1, Rows - 3);
 
-    filter = new_ItemFilter();
-    filter->model = model;
-
     pplist = new_PopupList();
-    pplist->model = model;
+    pplist->op->set_model(pplist, model);
     model->op->default_keymap(model, pplist);
     if (title)
        model->op->set_title(model, title);
 
     pplist->column_split = 1; /* TODO: option */
 
-    pplist->filter  = filter;
     pplist->aligner = aligner;
 
     if (options)
@@ -3399,7 +3866,6 @@ puls_test(argvars, rettv)
 
     CLASS_DELETE(pplist);
     CLASS_DELETE(aligner);
-    CLASS_DELETE(filter);
     CLASS_DELETE(model);
 
     return rv;
