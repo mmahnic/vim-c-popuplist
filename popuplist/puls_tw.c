@@ -354,75 +354,6 @@ _hlshrt_calc_attr(_self, next_char)
 
 /* [ooc]
  *
-  class ISearchHighlighter(Highlighter) [hlisrc]
-  {
-    int	    match_attr;
-    char_u* pattern;
-    int     patt_len;
-    void    init();
-    void    destroy();
-    int	    calc_attr(char_u* next_char);
-    void    set_pattern(char_u* pattern);
-  };
-*/
-
-    static void
-_hlisrc_init(_self)
-    void* _self;
-{
-    METHOD(ISearchHighlighter, init);
-    self->pattern = NULL;
-    self->patt_len = 0;
-    self->match_attr = self->default_attr;
-}
-
-    static void
-_hlisrc_destroy(_self)
-    void* _self;
-{
-    METHOD(ISearchHighlighter, destroy);
-    _str_free(&self->pattern);
-    END_DESTROY(ISearchHighlighter);
-}
-
-    static void
-_hlisrc_set_pattern(_self, pattern)
-    void* _self;
-    char_u* pattern;
-{
-    METHOD(ISearchHighlighter, set_pattern);
-    _str_assign(&self->pattern, pattern);
-    self->patt_len = STRLEN(self->pattern);
-}
-
-    static int
-_hlisrc_calc_attr(_self, next_char)
-    void* _self;
-    char_u* next_char;
-{
-    METHOD(ISearchHighlighter, calc_attr);
-    if (! self->pattern || ! self->patt_len)
-	return 0;
-
-    if (self->match_end >= next_char)
-	return 1;
-
-    if (0 == STRNCMP(next_char, self->pattern, self->patt_len)) /* TODO: support regex */
-    {
-	self->text_attr = self->match_attr;
-	self->match_end = next_char + self->patt_len - 1; /* TODO: match length */
-	return 1;
-    }
-    else
-    {
-	self->text_attr = self->default_attr;
-	self->match_end = next_char;
-    }
-    return 0;
-}
-
-/* [ooc]
- *
   class TextMatchHighlighter(Highlighter) [hltxm]
   {
     TextMatcher* matcher;
@@ -450,7 +381,7 @@ _hltxm_destroy(_self)
     void* _self;
 {
     METHOD(TextMatchHighlighter, destroy);
-    END_DESTROY(ISearchHighlighter);
+    END_DESTROY(TextMatchHighlighter);
 }
 
     static void

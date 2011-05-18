@@ -1009,74 +1009,12 @@ _lned_backspace(_self)
 
 /* [ooc]
  *
-  const MAX_FILTER_SIZE = 127;
-  class ISearch(object) [isrch]
-  {
-    char_u  text[MAX_FILTER_SIZE + 1];
-    int	    start;    // start index for incremental search
-    void    init();
-    void    destroy();
-    void    set_text(char_u* ptext);
-    int	    match(char_u* ptext);
-  };
-*/
-
-    static void
-_isrch_init(_self)
-    void* _self;
-{
-    METHOD(ISearch, init);
-    self->text[0] = NUL;
-    self->start = 0;
-}
-
-    static void
-_isrch_destroy(_self)
-    void* _self;
-{
-    METHOD(ISearch, destroy);
-    END_DESTROY(ISearch);
-}
-
-    static void
-_isrch_set_text(_self, ptext)
-    void* _self;
-    char_u* ptext;
-{
-    METHOD(ISearch, set_text);
-
-    if (! ptext)
-	*self->text = NUL;
-    else
-    {
-	STRNCPY(self->text, ptext, MAX_FILTER_SIZE);
-	self->text[MAX_FILTER_SIZE] = NUL;
-    }
-}
-
-    static int
-_isrch_match(_self, haystack)
-    void* _self;
-    char_u* haystack;
-{
-    METHOD(ISearch, match);
-    char *p;
-    if (! haystack || ! *haystack)
-	return 0;
-    if (! *self->text)
-	return 1;
-    p = _stristr(haystack, self->text);
-    if (! p)
-	return 0;
-    return 1;
-}
-
-/* [ooc]
- *
   // Used by the ItemFilter to assign a score to every item.
   // TODO: Used by the highlighter to higlight the matches.
+  // TODO: The default implementation does a regex search.
   class TextMatcher [txm]
   {
+    char_u  mode_char; // a character to display in the border, identifies the matcher
     char_u* _needle;
     int	    _need_strlen;
     ulong   empty_score; // score for empty needle, default is 1
@@ -1100,6 +1038,7 @@ _txm_init(_self)
     void* _self;
 {
     METHOD(TextMatcher, init);
+    self->mode_char = 'S'; /* simple */
     self->_needle = NULL;
     self->_need_strlen = 0;
     self->empty_score = 1;
@@ -1159,15 +1098,10 @@ _txm_match(_self, haystack)
 	return 0;
     score = 1;
     d = p - (char*)haystack;
-    if (d == 0) /* start of text */
-	score += 100;
-    else if (isalnum(*(p-1)) != isalnum(*needle)) /* simplistic start-of-word check */
-	score += 50;
-    /* XXX: option?: better if near the start */
-    /*if (d < 30)*/
-    /*    score += 30 - d;*/
-    /* XXX: option?: sort by first char if same score */
-    /* score = (score + 1) * 256 - *haystack; */
+    if (d < 50)
+       score += 50 - d;
+    if (d == 0 || isalnum(*(p-1)) != isalnum(*needle)) /* simplistic start-of-word check */
+	score += 30;
     return score;
 }
 
@@ -1190,6 +1124,281 @@ _txm_get_match_at(_self, haystack)
 
     if (0 == STRNICMP(haystack, self->_needle, self->_need_strlen))
 	return self->_need_strlen;
+
+    return 0;
+}
+
+/* [ooc]
+ *
+  const TMWME_MAX_WORDS = 16;
+  struct TmWordMatchExpr [tmwmxpr]
+  {
+    TmWordMatchExpr* next;
+    // words are stored in (a copy of) _needle
+    // max 16 words per group to avoid reallocation; we could use a small segmented grow array, instead
+    char_u** not_words;
+    int	     not_count;
+    char_u** yes_words;
+    int	     yes_count;
+    void    init();
+    void    destroy();
+    void    add_word_start(char_u* _word, int yesno);
+  };
+
+  // Find all (space) delimited words.
+  // Words preceeded by '-' must not be in the match. (alternative: '!')
+  // Later AND space-delimited, OR '|' delimited.
+  class TextMatcherWords(TextMatcher) [txmwrds]
+  {
+    char_u*	     _str_words;  // a modified copy of _needle (with NUL characters)
+    TmWordMatchExpr* expressions; // list of OR-ed expression
+    ListHelper*      lst_expr;
+
+    void    init();
+    void    destroy();
+    void    clear_words();
+    void    set_search_str(char_u* needle);
+    ulong   match(char_u* haystack);
+    void    init_highlight(char_u* haystack);
+    int     get_match_at(char_u* haystack);
+  };
+*/
+
+    static void
+_tmwmxpr_init(_self)
+    void* _self;
+{
+    METHOD(TmWordMatchExpr, init);
+    self->next = NULL;
+    self->not_count = 0;
+    self->yes_count = 0;
+    self->not_words = NULL;
+    self->yes_words = NULL;
+}
+
+    static void
+_tmwmxpr_destroy(_self)
+    void* _self;
+{
+    METHOD(TmWordMatchExpr, destroy);
+    vim_free(self->not_words);
+    vim_free(self->yes_words);
+}
+
+    static void
+_tmwmxpr_add_word_start(_self, _word, yesno)
+    void* _self;
+    char_u* _word;
+    int yesno;
+{
+    METHOD(TmWordMatchExpr, add_word_start);
+    if (yesno)
+    {
+	if (! self->yes_words)
+	    self->yes_words = (char_u**) alloc(sizeof(char_u*) * TMWME_MAX_WORDS);
+	if (self->yes_count < TMWME_MAX_WORDS)
+	{
+	    self->yes_words[self->yes_count] = _word;
+	    ++self->yes_count;
+	}
+    }
+    else
+    {
+	if (! self->not_words)
+	    self->not_words = (char_u**) alloc(sizeof(char_u*) * TMWME_MAX_WORDS);
+	if (self->not_count < TMWME_MAX_WORDS)
+	{
+	    self->not_words[self->not_count] = _word;
+	    ++self->not_count;
+	}
+    }
+}
+
+    static void
+_txmwrds_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcherWords, init);
+    self->mode_char = 'W'; /* words */
+    self->_str_words = NULL;
+    self->expressions = NULL;
+    self->lst_expr = new_ListHelper();
+    self->lst_expr->fn_destroy = &_tmwmxpr_destroy;
+    self->lst_expr->first = (void**) &self->expressions;
+    self->lst_expr->offs_next = offsetof(TmWordMatchExpr_T, next);
+}
+
+    static void
+_txmwrds_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcherWords, destroy);
+    self->op->clear_words(self);
+    CLASS_DELETE(self->lst_expr);
+}
+
+    static void
+_txmwrds_clear_words(_self)
+    void* _self;
+{
+    METHOD(TextMatcherWords, clear_words);
+    self->lst_expr->op->delete_all(self->lst_expr, NULL /* no condition => all */);
+    vim_free(self->_str_words);
+    self->_str_words = NULL;
+}
+
+    static void
+_txmwrds_set_search_str(_self, needle)
+    void*    _self;
+    char_u*  needle;
+{
+    METHOD(TextMatcherWords, set_search_str);
+    int i, wordstart, notword;
+    char_u* p;
+    TmWordMatchExpr_T* pexpr;
+
+    self->op->clear_words(self);
+    super(TextMatcherWords, set_search_str)(self, needle);
+    if (! self->_needle || ! self->_need_strlen)
+	return;
+
+    self->_str_words = vim_strsave(self->_needle);
+    p = self->_str_words;
+    pexpr = NULL;
+    wordstart = 1;
+    for(i = 0; i < self->_need_strlen; ++p, ++i)
+    {
+	if (*p == NUL)
+	    break;
+	if (isspace(*p))
+	{ 
+	    *p = NUL;
+	    wordstart = 1;
+	    continue;
+	}
+	if (*p == '|')
+	{
+	    *p = NUL;
+	    pexpr = NULL;
+	    wordstart = 1;
+	    continue;
+	}
+	if (wordstart)
+	{
+	    if (!pexpr)
+	    {
+		pexpr = new_TmWordMatchExpr();
+		self->lst_expr->op->add_tail(self->lst_expr, pexpr);
+	    }
+	    wordstart = 0;
+	    notword = (*p == '-');
+	    if (*p == '-' || *p == '+')
+	    {
+		++p;
+		if (*p == NUL)
+		    break;
+	    }
+	    if (! isspace(*p) && *p != '|')
+		_tmwmxpr_add_word_start(pexpr, p, !notword);
+	}
+    }
+    /* TODO: remove empty words / expressions */
+}
+
+    static ulong
+_txmwrds_match(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherWords, match);
+    TmWordMatchExpr_T* pexpr;
+    int i, notword, score, d;
+    char_u* p;
+    if (! self->_str_words)
+	return 1;
+
+    pexpr = self->expressions;
+    while(pexpr)
+    {
+	/* find any not_word */
+	notword = 0;
+	for (i = 0; i < pexpr->not_count; i++)
+	{ 
+	    if (! *pexpr->not_words[i]) /* empty word */
+		continue;
+	    p = _stristr(haystack, pexpr->not_words[i]);
+	    if (p)
+	    {
+		pexpr = pexpr->next;
+		notword = 1;
+		break;
+	    }
+	}
+	if (notword)
+	    continue;
+
+	/* find all yeswords */
+	score = 0;
+	notword = 0;
+	for (i = 0; i < pexpr->yes_count; i++)
+	{ 
+	    p = pexpr->yes_words[i];
+	    if (! *p) /* empty word */
+		continue;
+	    p = _stristr(haystack, p);
+	    if (! p)
+	    {
+		notword = 1;
+		break;
+	    }
+	    d = p - haystack;
+	    if (d > 100)
+		d = 100;
+	    score += (pexpr->yes_count - i) * (101 - d);
+	}
+	if (! notword)
+	    return score + pexpr->yes_count * 10 + pexpr->not_count * 15;
+
+	pexpr = pexpr->next;
+    }
+
+    return 0;
+}
+
+    static void
+_txmwrds_init_highlight(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherWords, init_highlight);
+}
+
+    static int
+_txmwrds_get_match_at(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherWords, get_match_at);
+    TmWordMatchExpr_T* pexpr;
+    int i, n;
+    if (! self->_str_words)
+	return 0;
+
+    /* find *ANY* yes_words */
+    /* TODO: maybe we should match only words from the actual matching subexpression */
+    pexpr = self->expressions;
+    while(pexpr)
+    {
+	for (i = 0; i < pexpr->yes_count; i++)
+	{ 
+	    if (! *pexpr->yes_words[i]) /* empty word */
+		continue;
+	    n = strlen(pexpr->yes_words[i]);
+	    if (0 == STRNICMP(haystack, pexpr->yes_words[i], n))
+		return n;
+	}
+	pexpr = pexpr->next;
+    }
 
     return 0;
 }
@@ -1233,6 +1442,7 @@ _txmcmdt_init(_self)
     void* _self;
 {
     METHOD(TextMatcherCmdT, init);
+    self->mode_char = 'T'; /* command-t */
     self->last_retry_offset = -1;
     self->_need_len = 0;
     self->_need_chars = NULL;
@@ -1521,6 +1731,82 @@ _txmcmdt_get_match_at(_self, haystack)
 
 /* [ooc]
  *
+  const MAX_FILTER_SIZE = 127;
+  class ISearch(object) [isrch]
+  {
+    char_u  text[MAX_FILTER_SIZE + 1];
+    int	    start;    // start index for incremental search
+    TextMatcher* matcher;
+    void    init();
+    void    destroy();
+    void    set_matcher(TextMatcher* pmatcher);
+    void    set_text(char_u* ptext);
+    int	    match(char_u* ptext);
+  };
+*/
+
+    static void
+_isrch_init(_self)
+    void* _self;
+{
+    METHOD(ISearch, init);
+    self->text[0] = NUL;
+    self->start = 0;
+    self->matcher = (TextMatcher_T*) new_TextMatcher();
+}
+
+    static void
+_isrch_destroy(_self)
+    void* _self;
+{
+    METHOD(ISearch, destroy);
+    CLASS_DELETE(self->matcher);
+    END_DESTROY(ISearch);
+}
+
+    static void
+_isrch_set_matcher(_self, pmatcher)
+    void* _self;
+    TextMatcher_T* pmatcher;
+{
+    METHOD(ISearch, set_matcher);
+    if (pmatcher == self->matcher)
+	return;
+    CLASS_DELETE(self->matcher);
+    self->matcher = pmatcher;
+    self->matcher->op->set_search_str(self->matcher, self->text);
+}
+
+    static void
+_isrch_set_text(_self, ptext)
+    void* _self;
+    char_u* ptext;
+{
+    METHOD(ISearch, set_text);
+
+    if (! ptext)
+	*self->text = NUL;
+    else
+    {
+	STRNCPY(self->text, ptext, MAX_FILTER_SIZE);
+	self->text[MAX_FILTER_SIZE] = NUL;
+    }
+    self->matcher->op->set_search_str(self->matcher, self->text);
+}
+
+    static int
+_isrch_match(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(ISearch, match);
+    if (! self->matcher)
+	return 0;
+    return self->matcher->op->match(self->matcher, haystack);
+}
+
+/* [ooc]
+ *
   class FltComparator_Score(ItemComparator) [flcmpscr]
   {
     ItemProvider* model;
@@ -1591,7 +1877,7 @@ _iflt_init(_self)
     self->model = NULL;
     self->text[0] = NUL;
     self->items = new_SegmentedGrowArrayP(sizeof(int), NULL);
-    self->matcher = (TextMatcher_T*) new_TextMatcher(); /* start with the default text matcher */
+    self->matcher = (TextMatcher_T*) new_TextMatcherWords();
 }
 
     static void
@@ -1615,6 +1901,7 @@ _iflt_set_matcher(_self, pmatcher)
 	return;
     CLASS_DELETE(self->matcher);
     self->matcher = pmatcher;
+    self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
     static void
@@ -1668,6 +1955,7 @@ _iflt_filter_items(_self)
 	    *pmi = i;
     }
 
+    /* TODO: an option to sort by score or to keep the original order */
     init_FltComparator_Score(&cmp);
     cmp.model = self->model;
     cmp.reverse = 1;
@@ -1922,6 +2210,7 @@ _bxal_align(_self, box, border)
      char_u*	name;
      dict_T*	key2cmd;    // maps a raw Vim sequence to a command name
      int	has_insert; // kmap is used for text insertion
+     char_u	mode_char;  // displayed in the border when input is active; only used with has_insert
      // Vim is able to produce a nice name from a given raw sequence ...
      //    - eval_vars() expands <cword> etc. but not keys
      //    - get_string_tv() (eval.c) -> trans_special() (misc2.c) -> find_special_key() translates <keys>
@@ -1954,6 +2243,7 @@ _skmap_init(_self)
     METHOD(SimpleKeymap, init);
     self->name = NULL;
     self->has_insert = 0;
+    self->mode_char = NUL;
     self->key2cmd = dict_alloc();
     ++self->key2cmd->dv_refcount;
 }
@@ -2377,7 +2667,7 @@ _wbor_draw_bottom(_self)
     writer->tab_size = -1;
 
     /* MODE */
-    writer->op->set_limits(writer, col, col+1);
+    writer->op->set_limits(writer, col, col+2);
     writer->op->write_line(writer, self->mode, row, attr, chbot);
     col += 2;
 
@@ -2516,9 +2806,10 @@ _wbor_draw_item_right(_self, line, current)
     WindowBorder*   border;
     LineEdit*	    line_edit;
     ShortcutHighlighter*    hl_menu;
-    ISearchHighlighter*	    hl_user;   // set in options
-    TextMatchHighlighter*   hl_filter; // TODO: depends on the selected filter
-    ISearchHighlighter*	    hl_isearch;
+    TextMatcher*            user_matcher; // used with hl_user to highlight a user-defined string
+    TextMatchHighlighter*   hl_user;      // set in options
+    TextMatchHighlighter*   hl_filter;    // TODO: depends on the selected filter
+    TextMatchHighlighter*   hl_isearch;
     Highlighter*	    hl_chain;  // chain of highlighters, updated in update_hl_chain()
     Box position;	    // position of the items, without the frame
     int current;	    // index of selected item or -1
@@ -2583,10 +2874,11 @@ _puls_init(_self)
 
     self->op->default_keymap(self);
 
+    self->user_matcher = NULL;
+    self->hl_user = NULL;
     self->hl_chain = NULL;
     self->hl_menu = NULL;
-    self->hl_user = NULL;
-    self->hl_isearch = new_ISearchHighlighter();
+    self->hl_isearch = new_TextMatchHighlighter();
     self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
     self->hl_filter = new_TextMatchHighlighter();
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
@@ -2609,6 +2901,7 @@ _puls_destroy(_self)
     CLASS_DELETE(self->km_search);
     CLASS_DELETE(self->border);
     CLASS_DELETE(self->line_edit);
+    CLASS_DELETE(self->user_matcher);
     CLASS_DELETE(self->hl_user);
     CLASS_DELETE(self->hl_menu);
     CLASS_DELETE(self->hl_isearch);
@@ -2672,10 +2965,15 @@ _puls_read_options(_self, options)
     option = dict_find(options, "highlight", -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
+	if (! self->user_matcher)
+	    self->user_matcher = (TextMatcher_T*) new_TextMatcher();
+	self->user_matcher->op->set_search_str(self->user_matcher, option->di_tv.vval.v_string);
 	if (! self->hl_user)
-	    self->hl_user = new_ISearchHighlighter();
+	{
+	    self->hl_user = new_TextMatchHighlighter();
+	    self->hl_user->matcher = self->user_matcher;
+	}
 	self->hl_user->match_attr = _puls_hl_attrs[PULSATTR_HL_USER].attr;
-	self->hl_user->op->set_pattern(self->hl_user, option->di_tv.vval.v_string);
     }
 
     option = dict_find(options, "current", -1L);
@@ -2733,8 +3031,16 @@ _puls_default_keymap(_self)
 
     for (i = 0; i < 2; i++)
     {
-	if (i == 0) modemap = self->km_filter;
-	else if (i == 1) modemap = self->km_search;
+	if (i == 0)
+	{
+	    modemap = self->km_filter;
+	    modemap->mode_char = '%';
+	}
+	else if (i == 1)
+	{
+	    modemap = self->km_search;
+	    modemap->mode_char = '/';
+	}
 	modemap->op->clear_all_keys(modemap);
 	modemap->op->set_vim_key(modemap, "<cr>", "accept");
 	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal");
@@ -2742,7 +3048,8 @@ _puls_default_keymap(_self)
 	modemap->op->set_vim_key(modemap, "<backspace>", "input-bs");
 	modemap->has_insert = 1;
     }
-
+    self->km_filter->op->set_vim_key(self->km_filter, "<c-f>", "filter-next-matcher");
+    self->km_search->op->set_vim_key(self->km_search, "<c-f>", "isearch-next-matcher");
 }
 
     static void
@@ -2972,6 +3279,7 @@ _puls_update_hl_chain(_self)
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
     lst_chain.op->add_tail(&lst_chain, self->hl_filter);
 
+    self->hl_isearch->op->set_matcher(self->hl_isearch, self->isearch->matcher);
     self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
     lst_chain.op->add_tail(&lst_chain, self->hl_isearch);
 }
@@ -3192,10 +3500,31 @@ _puls_on_isearch_change(_self, data)
 {
     METHOD(PopupList, on_isearch_change);
     self->isearch->op->set_text(self->isearch, self->line_edit->text);
+    /* TODO: verify if using hl_isearch->set_matcher(isearch->matcher) in update_hl_chain is enough
     if (self->hl_isearch)
 	self->hl_isearch->op->set_pattern(self->hl_isearch, self->isearch->text);
+    */
 
     self->op->do_isearch(self);
+}
+
+/* TODO: create a real factory class. */
+/* TODO: the default matchers can be selected as options. */
+/* TODO: the current matchers are returned in state so that the caller can restore them on next call. */
+    static TextMatcher_T*
+_factory_next_matcher(current)
+    TextMatcher_T* current;
+{
+    if (! current)
+	return (TextMatcher_T*) new_TextMatcher();
+    if ((void*) current->op == (void*) &_vt_TextMatcher) /* typeof() check */
+	return (TextMatcher_T*) new_TextMatcherWords();
+    if ((void*) current->op == (void*) &_vt_TextMatcherWords)
+	return (TextMatcher_T*) new_TextMatcherCmdT();
+    if ((void*) current->op == (void*) &_vt_TextMatcherCmdT)
+	return (TextMatcher_T*) new_TextMatcher();
+
+    return (TextMatcher_T*) new_TextMatcher(); /* failsafe */
 }
 
     static int
@@ -3313,6 +3642,29 @@ _puls_do_command(_self, command)
 	    self->isearch->start = self->current + 1;
 	    if (! self->op->do_isearch(self))
 		self->op->set_current(self, cur);
+	}
+	return 1;
+    }
+    else if (EQUALS(command, "isearch-next-matcher")) {
+	TextMatcher_T* matcher;
+	matcher = _factory_next_matcher(self->isearch->matcher);
+	if (matcher)
+	{
+	    self->isearch->op->set_matcher(self->isearch, matcher);
+	    self->hl_isearch->op->set_matcher(self->hl_isearch, matcher);
+	    self->need_redraw |= PULS_REDRAW_ALL;
+	}
+	return 1;
+    }
+    else if (EQUALS(command, "filter-next-matcher")) {
+	TextMatcher_T* matcher;
+	matcher = _factory_next_matcher(self->filter->matcher);
+	if (matcher)
+	{
+	    self->filter->op->set_matcher(self->filter, matcher);
+	    self->hl_filter->op->set_matcher(self->hl_filter, matcher);
+	    self->op->on_filter_change(self, NULL); /* to trigger filtering */
+	    self->need_redraw |= PULS_REDRAW_ALL;
 	}
 	return 1;
     }
@@ -3463,6 +3815,25 @@ _puls_test_loop(pplist, rettv)
 		    pplist->filter->op->get_item_count(pplist->filter),
 		    pmodel->op->get_item_count(pmodel));
 	    pborder->op->set_info(pborder, buf);
+	    if (pplist->need_redraw)
+	    {
+		char_u buf[16];
+		if (modemap && pborder->input_active)
+		{
+		    TextMatcher_T* ptm = NULL;
+		    if (modemap == pplist->km_filter)
+			ptm = pplist->filter->matcher;
+		    else if (modemap == pplist->km_search)
+			ptm = pplist->isearch->matcher;
+		    if (ptm)
+			sprintf(buf, "%c%c", ptm->mode_char, modemap->mode_char);
+		    else 
+			sprintf(buf, " %c", modemap->mode_char);
+		}
+		else 
+		    buf[0] = NUL;
+		pborder->op->set_mode_text(pborder, buf);
+	    }
 	}
 	if (pplist->need_redraw & PULS_REDRAW_CLEAR)
 	{
@@ -3606,10 +3977,7 @@ _puls_test_loop(pplist, rettv)
 	    pplist->line_edit->change_obsrvrs.op->remove_obj(&pplist->line_edit->change_obsrvrs, pplist);
 	    modemap = pplist->km_normal;
 	    if (pborder)
-	    {
-		pborder->op->set_mode_text(pborder, "");
 		pborder->op->set_input_active(pborder, 0);
-	    }
 	    pplist->need_redraw |= PULS_REDRAW_FRAME;
 	    continue;
 	}
@@ -3620,7 +3988,6 @@ _puls_test_loop(pplist, rettv)
 	    {
 		pplist->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: set_max_len to trim the current value */
 		pplist->line_edit->op->set_text(pplist->line_edit, pplist->filter->text);
-		pborder->op->set_mode_text(pborder, "%");
 		pborder->op->set_input_active(pborder, 1);
 	    }
 	    pplist->need_redraw |= PULS_REDRAW_FRAME;
@@ -3635,7 +4002,6 @@ _puls_test_loop(pplist, rettv)
 	    {
 		pplist->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: use set_max_len() to trim the current value */
 		pplist->line_edit->op->set_text(pplist->line_edit, pplist->isearch->text);
-		pborder->op->set_mode_text(pborder, "/");
 		pborder->op->set_input_active(pborder, 1);
 	    }
 	    pplist->need_redraw |= PULS_REDRAW_FRAME;

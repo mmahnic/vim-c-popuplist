@@ -107,6 +107,7 @@ _imtchr_match(_self, item)
     short   offs_next;     // offsetof(next) in item
     short   offs_prev;     // offsetof(prev) in item (optional)
     void    init();
+    void    destroy();
     void    add_head(void* item);
     void    add_tail(void* item);
     void*   remove(void* item);
@@ -131,6 +132,13 @@ _lsthlpr_init(_self)
     self->offs_prev = -1;
 }
 
+    static void
+_lsthlpr_destroy(_self)
+    void* _self;
+{
+    METHOD(ListHelper, destroy);
+    END_DESTROY(ListHelper);
+}
     static void
 _lsthlpr_add_head(_self, item)
     void* _self;
@@ -228,7 +236,7 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
     pnext = pit ? *(void**)(pit + offnext) : NULL;
     while (pnext)
     {
-	if (cond->op->match(cond, pnext))
+	if (!cond || cond->op->match(cond, pnext))
 	{
 	    pdel = pnext;
 	    /* pit->next = pit->next->next */
