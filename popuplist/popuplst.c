@@ -51,7 +51,7 @@ static char_u blankline[] = "";
 typedef int (*__puls_compar_fn_t)(const void* a, const void* b);
 
 #if 1
-list_T PULSLOG;
+static list_T PULSLOG; /* XXX: adding items to this list will create memory leaks */
     static void
 pulslog(char* fmt, ...)
 {
@@ -208,7 +208,7 @@ static _puls_hl_attrs_T _puls_hl_attrs[] = {
     { "PulsInputActive",    0, HLF_PSI },
     { "PulsShortcut",       0, HLF_PSI },
     { "PulsShortcutSel",    0, HLF_PSI },
-    { "PulsHlFilter",       0, HLF_PNI },
+    { "PulsHlFilter",       0, HLF_V },
     { "PulsHlSearch",       0, HLF_I },
     { "PulsHlUser",         0, HLF_L }
 };
@@ -234,19 +234,24 @@ _update_hl_attrs()
     }
 }
 
+/* TODO: split into popupls_.ci and popupls_.h so that structs can be defined in arbitrary order.
+ * This way it will be also possible to create multiple compilation units. */
 #include "popupls_.ci" /* created by mmoocc.py from class definitions in [ooc] blocks */
 #include "puls_st.c"
 #include "puls_tw.c"
 
 /*
  * Providers:
- *  list of C strings
- *  list of vim strings/arbitrary objects
- *  buffer list
  *  quickfix/location list
- *  menu tree
- *  filesystem tree
- *  filesystem flat view (files in subdirs)
+ *  buffer lines
+ *  DONE: list of vim strings/arbitrary objects
+ *  DONE: buffer list
+ *     - TODO: handle marked buffers
+ *  DONE: menu tree
+ *  DONE in vimuiex: filesystem tree
+ *  DONE in vimuiex: filesystem flat view (files in subdirs)
+ *  WONT DO: list of C strings
+ *
  * Interface:
  *  char_u* get_text(i)
  *     - returns a pointer to item text, NTS
@@ -270,10 +275,8 @@ _update_hl_attrs()
  *  The provider could respond to some actions:
  *	int exec_action(char_u* action, int current)
  *
- *  The items in the list could be marked. The porvider could do something with
- *  the marked items.
+ *  DONE: The items in the list can be marked.
  */
-
 
 /* [ooc]
  *
@@ -286,15 +289,18 @@ _update_hl_attrs()
   {
     void*	data; // additional data for the item
     char_u*	text;
-    // TODO: when the list is regenerated, the flags are lost! (marked, titleitem)
-    ushort	flags; // cached; marked; titleitem; ...
+
+    // @var flags: cached; marked; titleitem; ...
+    // when the list is regenerated, the flags are lost
+    ushort	flags;
     ushort	filter_start;
     ushort	filter_length;
     ulong	filter_score;
+    ushort	filter_parent_score; // for title items (up to 64k titles should be enough)
+
     void	init();
     void	destroy();
   };
-  typedef int (*PopupItemCompare_Fn)(PopupItem_T* a, PopupItem_T* b);
 */
 
     static void
@@ -304,10 +310,11 @@ _ppit_init(_self)
     METHOD(PopupItem, init);
     self->data		= NULL;
     self->text		= NULL;
+    self->flags		= 0;
     self->filter_start	= 0;
     self->filter_length	= 65535; /* assume NUL terminated string */
     self->filter_score	= 1;
-    self->flags		= 0;
+    self->filter_parent_score = 0;
 }
 
     static void
@@ -330,6 +337,10 @@ _ppit_destroy(_self)
     SegmentedGrowArray* items;
     dict_T*		commands;  // commands defined in vim-script
     char_u*		title;
+    int			has_title_items;
+    int			has_shortcuts;
+    NotificationList    title_obsrvrs;
+
     void	init();
     void	destroy();
     void	read_options(dict_T* options);
@@ -343,9 +354,9 @@ _ppit_destroy(_self)
     PopupItem_T* append_pchar_item(char_u* text, int shared);
     char_u*	get_display_text(int item);
 
-    // TODO: filternig can be implemented with a separate string or with a
-    // pointer into the original string and the size of the substring. We could
-    // assume that the part of the string to be filtered is contiguous.
+    // Filternig can be implemented with a separate string or with a
+    // pointer into the original string and the size of the substring.
+    // The part of the string to be filtered is contiguous.
     char_u*	get_filter_text(int item);
     char_u*	get_path_text();
     char_u*	get_title();
@@ -359,12 +370,20 @@ _ppit_destroy(_self)
     //	 1 - remain in the event loop; update the items, they may have changed
     //	-1 - exit the loop; return the result 'done' (executed by the handler)
     int		select_item(int item);
+
     // select_parent()
     // @returns:
     //   -1 - no parent
     //    i - index of current sublist in the parent list
     int		select_parent();
-    int		sort_items(ItemComparator* cmp); // returns TRUE if qsort was called
+
+    // find_shortcut()
+    // @returns TRUE if an item with a shortcut was found and fills index and unique.
+    // Starts looking from the 'start' item and wraps around.
+    int find_shortcut(char_u* qchar_mb, int startidx, int* index, int* unique);
+
+    // @returns TRUE if qsort was called
+    int		sort_items(ItemComparator* cmp);
 
     // the provider may add a extra information to the result or change the existing information
     void	update_result(dict_T* status);
@@ -385,6 +404,8 @@ _iprov_init(_self)
     self->commands = NULL;
     self->title = NULL;
     self->items = new_SegmentedGrowArrayP(sizeof(PopupItem_T), &_ppit_destroy);
+    self->has_title_items = 0;
+    self->has_shortcuts = 0;
 }
 
     static void
@@ -404,6 +425,15 @@ _iprov_destroy(_self)
     END_DESTROY(ItemProvider);
 }
 
+/* XXX: Options for options
+ * The options can be provided by the user every time or they can be remembered
+ * between runs.
+ * To remember them we could have a static structure that would be created
+ * the first time BufferItemProvider is executed.
+ * The other possibility is to let the user handle the options for each use-case
+ * in vimscript; in this case we pass the command 'option-changed' to the
+ * script after an option is changed.
+ */
     static void
 _iprov_read_options(_self, options)
     void* _self;
@@ -515,6 +545,7 @@ _iprov_set_title(_self, title)
 {
     METHOD(ItemProvider, set_title);
     _str_assign(&self->title, title);
+    self->title_obsrvrs.op->notify(&self->title_obsrvrs, NULL);
 }
 
     static void
@@ -569,6 +600,53 @@ _iprov_select_parent(_self)
     return -1; /* no parent, ignore */
 }
 
+    static int
+_iprov_find_shortcut(_self, qchar_mb, startidx, index, unique)
+    void* _self;
+    char_u* qchar_mb;
+    int startidx;
+    int* index;
+    int* unique;
+{
+    METHOD(ItemProvider, find_shortcut);
+    int item_count, i, start, end, step, found, len;
+    char_u *text, *p;
+
+    item_count = self->op->get_item_count(self);
+    start = startidx;
+    if (start < 0 || start >= item_count)
+	start = 0;
+    end = item_count-1;
+
+    len = STRLEN(qchar_mb);
+    found = 0;
+    for (step = 0; step < 2; ++step)
+    {
+	for(i = start; i <= end; ++i)
+	{
+	    text = self->op->get_display_text(self, i);
+	    p = text ? vim_strchr(text, '&') : NULL;
+	    if (!p)
+		continue;
+	    ++p;
+	    if (0 == STRNICMP(p, qchar_mb, len))
+	    {
+		if (found)
+		{
+		    *unique = 0;
+		    return 1;
+		}
+		found = 1;
+		*unique = 1;
+		*index = i;
+	    }
+	}
+	end = start-1;
+	start = 0;
+    }
+    return found;
+}
+
     static void
 _iprov_update_result(_self, status)
     void*	    _self;
@@ -615,12 +693,19 @@ _iprov_handle_command(_self, puls, command)
 	argv[1].vval.v_dict = status;
 	++argc;
 
-	/* TODO: make call_func non-static in eval.c */
+	/* XXX-VIM: make call_func non-static in eval.c */
 	call_func(fn, (int)STRLEN(fn), &rettv, argc, argv,
 		curwin->w_cursor.lnum, curwin->w_cursor.lnum,
 		&dummy, TRUE, selfdict);
 
 	dict_unref(status); /* could also use clear_tv(&argv[1]) */
+
+	/* TODO: handle rettv of handle_command:
+	 *  next-command: the next command to execute 
+	 * in VimlistItemProvider:
+	 *  append-items: list of items to be appended to the current list
+	 *  replace-items: list of items that replace the current list
+	 *  */
     }
 
     return NULL;
@@ -662,8 +747,15 @@ _iprov_sort_items(_self, cmp)
     // hierarchical level). At most 2 leading characters can be used.
     int		skip_leading;
 
+    // @var title_expr is an search string used to select titles in the
+    // item list. Each item that matches the search string will be marked
+    // as ITEM_TITLE.
+    char_u* title_expr;
+
     void	init();
     void	set_list(list_T* vimlist);
+    void	read_options(dict_T* options);
+    void	update_titles();
     char_u*	get_display_text(int item);
     void	destroy();
   };
@@ -675,6 +767,7 @@ _vlprov_init(_self)
 {
     METHOD(VimlistItemProvider, init);
     self->vimlist = NULL;
+    self->title_expr = NULL;
     self->_refcount = 0;
     self->skip_leading = 0;
 }
@@ -690,7 +783,53 @@ _vlprov_destroy(_self)
 	self->vimlist = NULL;
 	self->_refcount = 0;
     }
+    vim_free(self->title_expr);
     END_DESTROY(VimlistItemProvider);
+}
+
+    static void
+_vlprov_read_options(_self, options)
+    void* _self;
+    dict_T* options;
+{
+    METHOD(VimlistItemProvider, read_options);
+    dictitem_T* option;
+    super(VimlistItemProvider, read_options)(self, options);
+
+    option = dict_find(options, "titles", -1L);
+    if (option && option->di_tv.v_type == VAR_STRING)
+    {
+	if (option->di_tv.vval.v_string && *option->di_tv.vval.v_string)
+	    self->title_expr = vim_strsave(option->di_tv.vval.v_string);
+	else
+	    _str_free(&self->title_expr);
+	self->op->update_titles(self);
+    }
+}
+
+    static void
+_vlprov_update_titles(_self)
+    void* _self;
+{
+    METHOD(VimlistItemProvider, update_titles);
+    PopupItem_T *ppit;
+    int i, item_count;
+
+    self->has_title_items = 0;
+    item_count = self->op->get_item_count(self);
+    for(i = 0; i < item_count; i++)
+    {
+	ppit = self->op->get_item(self, i);
+	if (ppit && self->title_expr)
+	{
+	    // Check if it's a title. TODO: Use Vim regular expressions.
+	    if (STARTSWITH(ppit->text, self->title_expr))
+	    {
+		ppit->flags |= ITEM_TITLE;
+		self->has_title_items = 1;
+	    }
+	}
+    }
 }
 
 /*
@@ -714,15 +853,16 @@ _vlprov_set_list(_self, vimlist)
     }
 
     self->op->clear_items(self);
+    self->has_title_items = 0;
 
     self->vimlist = vimlist;
     if (vimlist)
     {
+	listitem_T *pitem;
 	++vimlist->lv_refcount;
 	self->_refcount = 1;
 
-	listitem_T *pitem = vimlist->lv_first;
-	while (pitem != NULL)
+	for (pitem = vimlist->lv_first; pitem != NULL; pitem = pitem->li_next)
 	{
 	    if (pitem->li_tv.v_type == VAR_STRING && pitem->li_tv.vval.v_string)
 	    {
@@ -731,9 +871,10 @@ _vlprov_set_list(_self, vimlist)
 	    }
 	    else
 		self->op->append_pchar_item(self, blankline, ITEM_SHARED);
-	    pitem = pitem->li_next;
 	}
     }
+    if (self->title_expr)
+	self->op->update_titles(self);
 }
 
     static char_u*
@@ -761,152 +902,72 @@ _vlprov_get_display_text(_self, item)
 #include "puls_pb.c"
 #endif
 
-/* TODO: #ifdef FEAT_POPUPLIST_MENU*/
+#ifdef FEAT_POPUPLIST_MENUS
 #include "puls_pm.c"
-/*#endif*/
+#endif
 
 /* [ooc]
  *
-  // Observer pattern
-  typedef int (*MethodCallback_Fn)(void* _self, void* _data);
-  struct NotificationCallback [ntfcb]
-  {
-    NotificationCallback* next;
-    void*   instance_self;
-    MethodCallback_Fn callback;
+  struct Box [box] {
+    int left;
+    int top;
+    int width;
+    int height;
     void init();
-    int  call(void* data);
-  };
-
-  class NotificationList [ntlst]
-  {
-    NotificationCallback* observers;
-    ListHelper lst_observers;
-    void init();
-    void destroy();
-    void notify(void* _data);
-    void add(void* instance, MethodCallback_Fn callback);
-    void remove_obj(void* instance);
-    void remove_cb(MethodCallback_Fn callback);
+    int right();   // right column
+    int bottom();  // bottom row
+    void move(int x, int y);
+    void resize(int width, int height);
   };
 */
 
     static void
-_ntfcb_init(_self)
+_box_init(_self)
     void* _self;
 {
-    METHOD(NotificationCallback, init);
-    self->next = NULL;
-    self->instance_self = NULL;
-    self->callback = NULL;
+    METHOD(Box, init);
+    self->left = 0;
+    self->top = 0;
+    self->width = 0;
+    self->height = 0;
 }
 
     static int
-_ntfcb_call(_self, _data)
-    void* _self;
-    void* _data;
-{
-    METHOD(NotificationCallback, call);
-    if (! self->callback)
-	return 0;
-    return (*self->callback)(self->instance_self, _data);
-}
-
-    static void
-_ntlst_init(_self)
+_box_right(_self)
     void* _self;
 {
-    METHOD(NotificationList, init);
-    self->observers = NULL;
-    self->lst_observers.first = (void**)&self->observers;
-    self->lst_observers.offs_next = offsetof(NotificationCallback_T, next);
-    /* items don't need destruction, so we don't set lst_observers.fn_destroy */
-}
-
-    static void
-_ntlst_destroy(_self)
-    void* _self;
-{
-    METHOD(NotificationList, destroy);
-    NotificationCallback_T* pit;
-    while (self->observers)
-    {
-	pit = self->observers;
-	self->observers = self->observers->next;
-	vim_free(pit);
-    }
-    END_DESTROY(NotificationList);
-}
-
-    static void
-_ntlst_notify(_self, _data)
-    void* _self;
-    void* _data;
-{
-    METHOD(NotificationList, notify);
-    NotificationCallback_T* pit;
-    pit = self->observers;
-    while (pit)
-    {
-	_ntfcb_call(pit, _data);
-	pit = pit->next;
-    }
-}
-
-    static void
-_ntlst_add(_self, instance, callback)
-    void* _self;
-    void* instance;
-    MethodCallback_Fn callback;
-{
-    METHOD(NotificationList, add);
-    NotificationCallback_T *pnew;
-    pnew = new_NotificationCallback();
-    pnew->instance_self = instance;
-    pnew->callback = callback;
-    self->lst_observers.op->add_tail(&self->lst_observers, pnew);
+    METHOD(Box, right);
+    return self->left + self->width - 1;
 }
 
     static int
-_fn_match_callback_instance(matcher, item)
-    ItemMatcher_T* matcher;
-    NotificationCallback_T* item;
+_box_bottom(_self)
+    void* _self;
 {
-    return (matcher->extra == item->instance_self);
+    METHOD(Box, bottom);
+    return self->top + self->height - 1;
 }
 
     static void
-_ntlst_remove_obj(_self, instance)
+_box_move(_self, x, y)
     void* _self;
-    void* instance;
+    int x;
+    int y;
 {
-    METHOD(NotificationList, remove_obj);
-    ItemMatcher_T cmp;
-    init_ItemMatcher(&cmp);
-    cmp.fn_match = &_fn_match_callback_instance;
-    cmp.extra = instance;
-    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
-}
-
-    static int
-_fn_match_callback_callback(matcher, item)
-    ItemMatcher_T* matcher;
-    NotificationCallback_T* item;
-{
-    return (matcher->extra == item->callback);
+    METHOD(Box, move);
+    self->left = x;
+    self->top = y;
 }
 
     static void
-_ntlst_remove_cb(_self, callback)
+_box_resize(_self, width, height)
     void* _self;
-    MethodCallback_Fn callback;
+    int width;
+    int height;
 {
-    METHOD(NotificationList, remove_cb);
-    ItemMatcher_T cmp;
-    init_ItemMatcher(&cmp);
-    cmp.fn_match = &_fn_match_callback_callback;
-    cmp.extra = callback;
-    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
+    METHOD(Box, resize);
+    self->width = width;
+    self->height = height;
 }
 
 /* [ooc]
@@ -915,9 +976,10 @@ _ntlst_remove_cb(_self, callback)
   class LineEdit(object) [lned]
   {
     char_u* text;
-    int	    len;
-    int	    size;
-    int	    max_len;
+    int	    size;       // space allocated for text
+    int	    len;	// the actual lenght
+    int	    max_len;    // max allowed length
+    Box     position;   // the position of the line edit on screen (TODO: relative to the parent)
     NotificationList change_obsrvrs;
     void    init();
     void    destroy();
@@ -936,6 +998,8 @@ _lned_init(_self)
     self->len = 0;
     self->size = 0;
     self->max_len = 0; /* unlimited */
+    init_Box(&self->position);
+    self->position.height = 1;
 }
 
     static void
@@ -1010,7 +1074,7 @@ _lned_backspace(_self)
 /* [ooc]
  *
   // Used by the ItemFilter to assign a score to every item.
-  // TODO: Used by the highlighter to higlight the matches.
+  // Used by the highlighter to higlight the matches.
   // TODO: The default implementation does a regex search.
   class TextMatcher [txm]
   {
@@ -1080,7 +1144,6 @@ _txm_set_search_str(_self, needle)
 _txm_match(_self, haystack)
     void* _self;
     char_u* haystack;
-    // char_u* needle; TODO: use this instead of self->_needle if provided
 {
     METHOD(TextMatcher, match);
     char *p;
@@ -1100,7 +1163,8 @@ _txm_match(_self, haystack)
     d = p - (char*)haystack;
     if (d < 50)
        score += 50 - d;
-    if (d == 0 || isalnum(*(p-1)) != isalnum(*needle)) /* simplistic start-of-word check */
+    /* simplistic start-of-word check */
+    if (d == 0 || isalnum(*(p-1)) != isalnum(*p))
 	score += 30;
     return score;
 }
@@ -1302,7 +1366,6 @@ _txmwrds_set_search_str(_self, needle)
 		_tmwmxpr_add_word_start(pexpr, p, !notword);
 	}
     }
-    /* TODO: remove empty words / expressions */
 }
 
     static ulong
@@ -1312,7 +1375,7 @@ _txmwrds_match(_self, haystack)
 {
     METHOD(TextMatcherWords, match);
     TmWordMatchExpr_T* pexpr;
-    int i, notword, score, d;
+    int i, notword, score, total_score, d;
     char_u* p;
     if (! self->_str_words)
 	return 1;
@@ -1338,7 +1401,7 @@ _txmwrds_match(_self, haystack)
 	    continue;
 
 	/* find all yeswords */
-	score = 0;
+	total_score = 0;
 	notword = 0;
 	for (i = 0; i < pexpr->yes_count; i++)
 	{ 
@@ -1354,10 +1417,17 @@ _txmwrds_match(_self, haystack)
 	    d = p - haystack;
 	    if (d > 100)
 		d = 100;
-	    score += (pexpr->yes_count - i) * (101 - d);
+	    score =  101 - d;
+	    /* simplistic start-of-word check */
+	    if (d == 0 || isalnum(*(p-1)) != isalnum(*p))
+		score += 30;
+	    /* weigh the words by the order they were defined in needle */
+	    if (i < 10)
+		score = score * (20 - i) / 10;
+	    total_score += score;
 	}
 	if (! notword)
-	    return score + pexpr->yes_count * 10 + pexpr->not_count * 15;
+	    return total_score + pexpr->not_count * 15;
 
 	pexpr = pexpr->next;
     }
@@ -1427,8 +1497,8 @@ _txmwrds_get_match_at(_self, haystack)
     void    init();
     void    destroy();
     void    _clear();
-    // TODO:  make matching a 2 step process: set_needle(needle), match(haystack).
-    // A lot of data has to be calculated for needle on every call!
+    // Matching is a 2 step process: set_search_str(needle), match(haystack).
+    // In some matchers a lot of data has to be calculated for needle on every call!
     void    set_search_str(char_u* needle);
     ulong   match(char_u* haystack);
     ulong   _calc_pos_score(char_u* haystack, char_u** positions, int npos);
@@ -1575,7 +1645,6 @@ _rfind_char(text, ch)
 _txmcmdt_match(_self, haystack)
     void* _self;
     char_u* haystack;
-    // char_u* needle; TODO: use this if provided
 {
     METHOD(TextMatcherCmdT, match);
     int		stack_pos;
@@ -1714,21 +1783,6 @@ _txmcmdt_get_match_at(_self, haystack)
     return len;
 }
 
-/* TODO: filtered items:
- *	- store sorted ranges of visible items
- *	- store count of ranges
- *	- store count of items
- * !!!! Not good! The filtered items are also sorted! 
- * XXX: do we want to have marked items that are currently hidden by the filter?
- *
- * Operation:
- *    - filter items into index field; a filter gives each item a score
- *    - (sort the items by score, use stable sorting so that the item order is preserved within same score)
- *    - XXX: what do we do with titles when sorting? User option while puls is visible:
- *	- keep the titles, sort items below titles
- *	- hide titles, sort all items
- */
-
 /* [ooc]
  *
   const MAX_FILTER_SIZE = 127;
@@ -1805,6 +1859,12 @@ _isrch_match(_self, haystack)
     return self->matcher->op->match(self->matcher, haystack);
 }
 
+/* 
+ * TODO: do we want to have marked items that are currently hidden by the filter?
+ *
+ * Operation:
+ */
+
 /* [ooc]
  *
   class FltComparator_Score(ItemComparator) [flcmpscr]
@@ -1814,19 +1874,47 @@ _isrch_match(_self, haystack)
     int   compare(void* pia, void* pib);
   };
 
+  class FltComparator_TitleScore(ItemComparator) [flcmpttsc]
+  {
+    ItemProvider* model;
+    void  init();
+    int   compare(void* pia, void* pib);
+  };
+
+  // Filter items into an index field. A TextMatcher gives each item a score.
+  // Items are sorted by score. The original item order is preserved for the items
+  // with the same score. If the item list contains title items, the titles are
+  // ordered by the highest score of their children. The children below each title
+  // are sorted by score.
+  //
   class ItemFilter(object) [iflt]
   {
     ItemProvider* model;
     char_u  text[MAX_FILTER_SIZE + 1];
     TextMatcher* matcher;
     SegmentedGrowArray* items; // indices of items in the model
+
+    // @var keep_titles defines how titles are treated after filtering.
+    // 0 - Hide titles; items are sorted by score.
+    // 1 - Show titles with matching 'child' items and hide other titles.
+    //     Titles are sorted by the score of the highest scored child item.
+    //     Child items are displayed after the appropriate title, sorted by score.
+    // TODO: Put keep_titles also in options.
+    int	    keep_titles;
+
     void    init();
     void    destroy();
     void    set_matcher(TextMatcher* pmatcher);
     void    set_text(char_u* ptext);
     void    filter_items();
     int	    get_item_count();
+    int	    is_active();
+
+    // get the model-index for index-th item in filtered items
     int	    get_model_index(int index);
+
+    // get the index of model_index in filtred items or -1 if not there
+    int	    get_index_of(int model_index);
   };
 */
 
@@ -1870,6 +1958,51 @@ _flcmpscr_compare(_self, pia, pib)
 }
 
     static void
+_flcmpttsc_init(_self)
+    void* _self;
+{
+    METHOD(FltComparator_TitleScore, init);
+    self->model = NULL;
+}
+
+    static int
+_flcmpttsc_compare(_self, pia, pib)
+    void* _self;
+    void* pia;
+    void* pib;
+{
+    /* pia and pib are pointers to indices of items in the model */
+    METHOD(FltComparator_TitleScore, compare);
+    PopupItem_T *pa, *pb;
+    if (!self->model)
+	return 0;
+    pa = self->model->op->get_item(self->model, *(int*)pia);
+    pb = self->model->op->get_item(self->model, *(int*)pib);
+    if (!pa)
+    {
+	if(!pb)
+	    return 0;
+	return 1;
+    }
+    else if (!pb)
+	return -1;
+
+    if (pa->filter_parent_score < pb->filter_parent_score) return self->reverse ? 1 : -1;
+    if (pa->filter_parent_score > pb->filter_parent_score) return self->reverse ? -1 : 1;
+
+    /* we have to ignore self->reverse for children and sort them from high to
+     * low score, otherwise the parent (title) would come after its children */
+    if (pa->filter_score < pb->filter_score) return  1;
+    if (pa->filter_score > pb->filter_score) return -1;
+
+    /* Sort items with the same score by the original sorting order; ignore self->reverse */
+    if (*(int*) pia < *(int*) pib) return -1;
+    if (*(int*) pia > *(int*) pib) return 1;
+
+    return 0;
+}
+
+    static void
 _iflt_init(_self)
     void* _self;
 {
@@ -1878,6 +2011,7 @@ _iflt_init(_self)
     self->text[0] = NUL;
     self->items = new_SegmentedGrowArrayP(sizeof(int), NULL);
     self->matcher = (TextMatcher_T*) new_TextMatcherWords();
+    self->keep_titles = 1;
 }
 
     static void
@@ -1922,29 +2056,44 @@ _iflt_set_text(_self, ptext)
 	self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
+    static int
+_iflt_is_active(_self)
+    void* _self;
+{
+    METHOD(ItemFilter, is_active);
+    return *self->text != NUL;
+}
+
     static void
 _iflt_filter_items(_self)
     void* _self;
 {
     METHOD(ItemFilter, filter_items);
-
+    ItemProvider_T *pmodel;
     PopupItem_T* pit;
     TextMatcher_T* matcher;
     FltComparator_Score_T cmp;
-    int item_count, i;
+    SegmentedGrowArray_T* title_items;
+    int item_count, i, handle_titles;
     int *pmi;
+    ulong score;
 
     self->items->op->clear(self->items);
     if (STRLEN(self->text) < 1 || !self->matcher)
 	return;
 
+    pmodel = self->model;
     matcher = self->matcher;
+    handle_titles = pmodel->has_title_items;
     /*matcher->op->set_search_str(matcher, self->text);*/
-    item_count = self->model->op->get_item_count(self->model);
+    item_count = pmodel->op->get_item_count(pmodel);
     for(i = 0; i < item_count; i++)
     {
-	ulong score = matcher->op->match(matcher, self->model->op->get_filter_text(self->model, i));
-	pit = self->model->op->get_item(self->model, i); /* TODO: set-item-score() */
+	if (handle_titles && !self->keep_titles && pmodel->op->has_flag(pmodel, i, ITEM_TITLE))
+	    score = 0;
+	else
+	    score = matcher->op->match(matcher, pmodel->op->get_filter_text(pmodel, i));
+	pit = pmodel->op->get_item(pmodel, i); /* TODO: set-item-score() */
 	if (pit)
 	    pit->filter_score = score;
 	if (score <= 0)
@@ -1955,11 +2104,102 @@ _iflt_filter_items(_self)
 	    *pmi = i;
     }
 
-    /* TODO: an option to sort by score or to keep the original order */
+    if (! handle_titles || ! self->keep_titles)
+    {
+	/* TODO: an option to sort by score or to keep the original order */
+	init_FltComparator_Score(&cmp);
+	cmp.model = self->model;
+	cmp.reverse = 1;
+	self->items->op->sort(self->items, (ItemComparator_T*)&cmp);
+
+	return;
+    }
+
+    /* Title items require special processing. They are visible only if they
+     * have any children. A title item gets the score of the best-scored child. */
+    score = 0;
+    title_items = new_SegmentedGrowArrayP(sizeof(int), NULL);
+    for (i = item_count-1; i >= 0; --i)
+    {
+	pit = pmodel->op->get_item(pmodel, i);
+	if (! pit)
+	    continue;
+	if (pmodel->op->has_flag(pmodel, i, ITEM_TITLE))
+	{
+	    if (pit->filter_score <= 0 && score > 0)
+	    {
+		/* a title item has to be displayed because a child matched */
+		pmi = (int*) self->items->op->get_new_item(self->items);
+		if (pmi)
+		    *pmi = i;
+	    }
+	    /* pit->filter_score > 0 && score <= 0:
+	     * A title item has to be hidden because no child matched. This can
+	     * be done after sorting since the ones to be removed will have
+	     * filter_score=0 and will be placed at the end of the index. */
+	    pit->filter_score = score;
+	    if (score > 0)
+	    {
+		pmi = (int*) title_items->op->get_new_item(title_items);
+		if (pmi)
+		    *pmi = i;
+	    }
+	    score = 0;
+	    continue;
+	}
+	else
+	{
+	    if (pit->filter_score > score)
+		score = pit->filter_score;
+	}
+    }
+
+    /* Each title item gets a unique score based on the sorting order. */
     init_FltComparator_Score(&cmp);
-    cmp.model = self->model;
+    cmp.model = pmodel;
     cmp.reverse = 1;
-    self->items->op->sort(self->items, (ItemComparator_T*)&cmp);
+    title_items->op->sort(title_items, (ItemComparator_T*)&cmp);
+    score = 0xffff; /* ushort_max */
+    for (i = 0; i < title_items->len; ++i)
+    {
+	pmi = (int*) title_items->op->get_item(title_items, i);
+	if (! pmi)
+	    continue;
+	pit = pmodel->op->get_item(pmodel, *pmi);
+	if (! pit)
+	    continue;
+	pit->filter_parent_score = score;
+	pit->filter_score = 0xffffffff; /* ulong_max; the parent must be displayed first. */
+	if (score > 0)
+	    --score;
+    }
+    CLASS_DELETE(title_items);
+
+    /* the parent_score of every title is copied to its children */
+    score = 0; /* items without a parent will go to the end */
+    for (i = 0; i < item_count; ++i)
+    {
+	pit = pmodel->op->get_item(pmodel, i);
+	if (! pit)
+	    continue;
+	if (pmodel->op->has_flag(pmodel, i, ITEM_TITLE))
+	    score = pit->filter_parent_score;
+	else
+	{
+	    pit->filter_parent_score = score;
+	    if (pit->filter_score > 0xfffffff0)
+		pit->filter_score = 0xfffffff0; /* less than parent-title */
+	}
+    }
+
+    /* the items can finally be sorted by parent_score/score */
+    {
+	FltComparator_TitleScore_T tcmp;
+	init_FltComparator_TitleScore(&tcmp);
+	tcmp.model = self->model;
+	tcmp.reverse = 1;
+	self->items->op->sort(self->items, (ItemComparator_T*)&tcmp);
+    }
 }
 
     static int
@@ -1988,70 +2228,31 @@ _iflt_get_model_index(_self, index)
     return *(int*) self->items->op->get_item(self->items, index);
 }
 
-/* [ooc]
- *
-  struct Box [box] {
-    int left;
-    int top;
-    int width;
-    int height;
-    void init();
-    int right();   // right column
-    int bottom();  // bottom row
-    void move(int x, int y);
-    void resize(int width, int height);
-  };
-*/
-
-    static void
-_box_init(_self)
-    void* _self;
-{
-    METHOD(Box, init);
-    self->left = 0;
-    self->top = 0;
-    self->width = 0;
-    self->height = 0;
-}
-
     static int
-_box_right(_self)
+_iflt_get_index_of(_self, model_index)
     void* _self;
+    int model_index;
 {
-    METHOD(Box, right);
-    return self->left + self->width - 1;
-}
+    METHOD(ItemFilter, get_index_of);
+    int i, item_count;
+    int *pmi;
+    if (STRLEN(self->text) < 1)
+	return model_index;
 
-    static int
-_box_bottom(_self)
-    void* _self;
-{
-    METHOD(Box, bottom);
-    return self->top + self->height - 1;
-}
+    item_count = self->model->op->get_item_count(self->model);
+    if (model_index < 0 || model_index >= item_count)
+	return -1;
 
-    static void
-_box_move(_self, x, y)
-    void* _self;
-    int x;
-    int y;
-{
-    METHOD(Box, move);
-    self->left = x;
-    self->top = y;
-}
+    item_count = self->items->len;
+    for(i = 0; i < item_count; i++)
+    {
+	pmi = (int*) self->items->op->get_item(self->items, i);
+	if (pmi && *pmi == model_index)
+	    return i;
+    }
 
-    static void
-_box_resize(_self, width, height)
-    void* _self;
-    int width;
-    int height;
-{
-    METHOD(Box, resize);
-    self->width = width;
-    self->height = height;
+    return -1;
 }
-
 
 /* [ooc]
  *
@@ -2402,7 +2603,7 @@ _skmap_clear_all_keys(_self)
   const SCROLLBAR_THUMB = 1;
   class WindowBorder [wbor]
   {
-    Box*    inner_box;
+    Box*    inner_box;          // the area for drawing the items; owned by popuplist
     int     item_count;
     int     active[4];		// visible sides: 'trbl'; 0 - off, otherwise on
     int     border_chars[8];	// spaces, single, double, minus/bar, ...
@@ -2690,12 +2891,20 @@ _wbor_draw_bottom(_self)
 	attr = _puls_hl_attrs[PULSATTR_INPUT].attr;
 	ch = chbot;
     }
+    /* TODO: the position/width of the edit box is calculated on resize */
     iw = self->inner_box->width / 3;
     if (iw < 8)
 	iw = 8;
     endcol = col + iw;
     if (endcol > right)
 	endcol = right;
+    if (self->line_edit)
+    {
+	self->line_edit->position.left = col;
+	self->line_edit->position.top = row;
+	self->line_edit->position.width = endcol - col + 1;
+    }
+    /* TODO: right-aligned text when it is too long for the line_edit width */
     writer->op->set_limits(writer, col, endcol);
     writer->op->write_line(writer, input, row, attr, ch);
     col = endcol + 1;
@@ -2794,6 +3003,9 @@ _wbor_draw_item_right(_self, line, current)
   const PULS_REDRAW_CLEAR   = 0x10;
   // resize before drawing; implies REDRAW_CLEAR
   const PULS_REDRAW_RESIZE  = 0x20;
+  // main loop control
+  const PULS_LOOP_BREAK	    = 0;
+  const PULS_LOOP_CONTINUE  = 1;
   class PopupList(object) [puls]
   {
     ItemProvider*   model;	// items of the displayed puls
@@ -2802,6 +3014,8 @@ _wbor_draw_item_right(_self, line, current)
     SimpleKeymap*   km_normal;
     SimpleKeymap*   km_filter;
     SimpleKeymap*   km_search;
+    SimpleKeymap*   km_shortcut;
+    SimpleKeymap*   modemap;	// current mode map
     BoxAligner*	    aligner;	// positions the list box on the screen
     WindowBorder*   border;
     LineEdit*	    line_edit;
@@ -2820,7 +3034,6 @@ _wbor_draw_item_right(_self, line, current)
     int col1_width;	    // width of column 1; only valid when column_split is TRUE
     int split_width;	    // the displayed width of column 0; less or eqal to col0_width
     int need_redraw;	    // redraw is needed 
-    char_u* title;
 
     void    init();
     void    destroy();
@@ -2832,13 +3045,19 @@ _wbor_draw_item_right(_self, line, current)
     void    reposition();
     void    update_hl_chain();
     void    redraw();
+    void    move_cursor();
     int	    do_command(char_u* command);
+    void    switch_mode(char_u* modename);
     void    prepare_result(dict_T* result);
     void    set_title(char_u* title);
     void    set_current(int index);
-    int	    do_isearch(); // perfrom isearch with the current isearch settings
+    int	    do_isearch(int dir); // perfrom isearch with the current isearch settings; @param dir=+-1
     int	    on_filter_change(void* data);   // callback to update filter when input changes
     int	    on_isearch_change(void* data);  // callback to uptate isearch when input changes
+    int	    on_model_title_changed(void* data);  // callback to uptate the title when it changes
+
+    // main loop
+    int	    process_command(char_u* command);
   };
 
 */
@@ -2850,7 +3069,6 @@ _puls_init(_self)
     METHOD(PopupList, init);
     self->model = NULL;
     self->aligner = NULL;
-    self->title = NULL;
     self->first = 0;
     self->current = 0;
     self->leftcolumn = 0;
@@ -2866,6 +3084,9 @@ _puls_init(_self)
     self->km_filter->op->set_name(self->km_filter, "filter");
     self->km_search = new_SimpleKeymap();
     self->km_search->op->set_name(self->km_search, "search");
+    self->km_shortcut = new_SimpleKeymap();
+    self->km_shortcut->op->set_name(self->km_shortcut, "shortcut");
+    self->modemap = self->km_normal;
     init_Box(&self->position);
     self->border = new_WindowBorder();
     self->border->inner_box = &self->position;
@@ -2899,6 +3120,7 @@ _puls_destroy(_self)
     CLASS_DELETE(self->km_normal);
     CLASS_DELETE(self->km_filter);
     CLASS_DELETE(self->km_search);
+    CLASS_DELETE(self->km_shortcut);
     CLASS_DELETE(self->border);
     CLASS_DELETE(self->line_edit);
     CLASS_DELETE(self->user_matcher);
@@ -2908,7 +3130,6 @@ _puls_destroy(_self)
     CLASS_DELETE(self->hl_filter);
     CLASS_DELETE(self->filter);
     CLASS_DELETE(self->isearch);
-    _str_free(&self->title);
 
     END_DESTROY(PopupList);
 }
@@ -2922,6 +3143,23 @@ _puls_set_model(_self, model)
     self->model = model;
     if (self->filter)
 	self->filter->model = model;
+
+    if (self->model)
+    {
+	self->model->title_obsrvrs.op->add(&self->model->title_obsrvrs,
+		self, &_puls_on_model_title_changed);
+	self->op->set_title(self, self->model->op->get_title(self->model));
+    }
+}
+
+    static int
+_puls_on_model_title_changed(_self, data)
+    void* _self;
+    void* data;
+{
+    METHOD(PopupList, on_model_title_changed);
+    if (self->model)
+	self->op->set_title(self, self->model->op->get_title(self->model));
 }
 
     static void
@@ -2960,7 +3198,11 @@ _puls_read_options(_self, options)
 	    self->aligner->op->set_align_params(self->aligner, option->di_tv.vval.v_dict);
     }
 
-    option = dict_find(options, "filter", -1L); /* TODO: select filtering mode */
+    option = dict_find(options, "mode", -1L);
+    if (option && option->di_tv.v_type == VAR_STRING)
+    {
+	self->op->switch_mode(self, option->di_tv.vval.v_string);
+    }
 
     option = dict_find(options, "highlight", -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
@@ -2991,7 +3233,6 @@ _puls_set_title(_self, title)
     char_u* title;
 {
     METHOD(PopupList, set_title);
-    _str_assign(&self->title, title);
     self->border->op->set_title(self->border, title);
 }
 
@@ -3015,12 +3256,16 @@ _puls_default_keymap(_self)
     modemap->op->set_key(modemap, "l", "shift-right");
     modemap->op->set_key(modemap, "m", "toggle-marked");
     modemap->op->set_key(modemap, "f", "modeswitch:filter");
-    modemap->op->set_key(modemap, "/", "modeswitch:isearch");
-    modemap->op->set_key(modemap, "s", "isearch-next"); /* XXX: <n> */
-    modemap->op->set_vim_key(modemap, "<down>", "next-item");
+    modemap->op->set_key(modemap, "%", "modeswitch:filter");
+    modemap->op->set_key(modemap, "/", "modeswitch:search");
+    modemap->op->set_key(modemap, "&", "modeswitch:shortcut");
+    modemap->op->set_vim_key(modemap, "<c-n>", "isearch-next");
+    modemap->op->set_vim_key(modemap, "<c-p>", "isearch-prev");
+    modemap->op->set_vim_key(modemap, "<c-t>", "filter-toggle-titles");
     modemap->op->set_vim_key(modemap, "<tab>", "next-item");
-    modemap->op->set_vim_key(modemap, "<up>", "prev-item");
     modemap->op->set_vim_key(modemap, "<s-tab>", "prev-item");
+    modemap->op->set_vim_key(modemap, "<down>", "next-item");
+    modemap->op->set_vim_key(modemap, "<up>", "prev-item");
     modemap->op->set_vim_key(modemap, "<pagedown>", "next-page");
     modemap->op->set_vim_key(modemap, "<pageup>", "prev-page");
     modemap->op->set_vim_key(modemap, "<left>", "shift-left");
@@ -3043,13 +3288,36 @@ _puls_default_keymap(_self)
 	}
 	modemap->op->clear_all_keys(modemap);
 	modemap->op->set_vim_key(modemap, "<cr>", "accept");
-	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal");
+	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal"); /*TODO:"modeswitch:normal|next-item"*/
 	modemap->op->set_vim_key(modemap, "<esc>", "modeswitch:normal");
 	modemap->op->set_vim_key(modemap, "<backspace>", "input-bs");
+	modemap->op->set_vim_key(modemap, "<c-u>", "input-clear");
 	modemap->has_insert = 1;
     }
-    self->km_filter->op->set_vim_key(self->km_filter, "<c-f>", "filter-next-matcher");
-    self->km_search->op->set_vim_key(self->km_search, "<c-f>", "isearch-next-matcher");
+    modemap = self->km_filter;
+    modemap->op->set_vim_key(modemap, "<c-f>", "filter-next-matcher");
+    modemap->op->set_vim_key(modemap, "<c-t>", "filter-toggle-titles");
+    modemap = self->km_search;
+    modemap->op->set_vim_key(modemap, "<c-n>", "isearch-next");
+    modemap->op->set_vim_key(modemap, "<c-p>", "isearch-prev");
+    modemap->op->set_vim_key(modemap, "<c-f>", "isearch-next-matcher");
+
+    modemap = self->km_shortcut;
+    modemap->mode_char = '&';
+    modemap->op->set_key(modemap, "%", "modeswitch:filter");
+    modemap->op->set_key(modemap, "/", "modeswitch:search");
+    modemap->op->set_key(modemap, "&", "modeswitch:normal");
+    modemap->op->set_vim_key(modemap, "<tab>", "next-item");
+    modemap->op->set_vim_key(modemap, "<s-tab>", "prev-item");
+    modemap->op->set_vim_key(modemap, "<down>", "next-item");
+    modemap->op->set_vim_key(modemap, "<up>", "prev-item");
+    modemap->op->set_vim_key(modemap, "<pagedown>", "next-page");
+    modemap->op->set_vim_key(modemap, "<pageup>", "prev-page");
+    modemap->op->set_vim_key(modemap, "<left>", "shift-left");
+    modemap->op->set_vim_key(modemap, "<right>", "shift-right");
+    modemap->op->set_vim_key(modemap, "<cr>", "accept");
+    modemap->op->set_vim_key(modemap, "<esc>", "quit");
+    modemap->op->set_vim_key(modemap, "<backspace>", "select-parent");
 }
 
     static void
@@ -3069,6 +3337,10 @@ _puls_map_keys(_self, kmap_name, kmap)
 	modemap = self->km_normal;
     else if (self->km_filter && EQUALS(kmap_name, self->km_filter->name))
 	modemap = self->km_filter;
+    else if (self->km_search && EQUALS(kmap_name, self->km_search->name))
+	modemap = self->km_search;
+    else if (self->km_shortcut && EQUALS(kmap_name, self->km_shortcut->name))
+	modemap = self->km_shortcut;
     else
 	return; /* TODO: WARN - invalid keymap name! */
 
@@ -3290,7 +3562,7 @@ _puls_redraw(_self)
 {
     int		thumb_heigth;
     int		thumb_pos;
-    int		i, idx_filter, idx_model;
+    int		i, idx_filter, idx_model, is_current;
     int		row, col, bottom, right;
     int		attr;
     int		attr_norm   = _puls_hl_attrs[PULSATTR_NORMAL].attr;
@@ -3327,6 +3599,9 @@ _puls_redraw(_self)
     self->border->op->prepare_scrollbar(self->border, item_count);
     self->border->op->draw_top(self->border);
 
+    if (self->hl_menu)
+	self->hl_menu->active = self->model->has_shortcuts;
+
     self->op->update_hl_chain(self); /* TODO: update when really needed */
     lhwriter = new_LineHighlightWriter();
     lhwriter->highlighters = self->hl_chain;
@@ -3344,10 +3619,8 @@ _puls_redraw(_self)
     for (i = 0; i < self->position.height; ++i)
     {
 	idx_filter = i + self->first;
-	attr = (idx_filter == self->current) ? attr_select : attr_norm;
-	/* TODO: attr for title items */
-	/* TODO: attr for marked items */
-	/* TODO: attr for substring match */
+	is_current = (idx_filter == self->current);
+	attr = is_current ? attr_select : attr_norm;
 
 	self->border->op->draw_item_left(self->border, i, self->current);
 	row = self->position.top + i;
@@ -3369,24 +3642,19 @@ _puls_redraw(_self)
 	else
 	{
 	    if (self->model->op->has_flag(self->model, idx_model, ITEM_DISABLED))
-	    {
-		attr = (idx_filter == self->current)
-		    ? _puls_hl_attrs[PULSATTR_DISABLED_SEL].attr
-		    : _puls_hl_attrs[PULSATTR_DISABLED].attr;
-	    }
+		attr = _puls_hl_attrs[is_current ? PULSATTR_DISABLED_SEL : PULSATTR_DISABLED].attr;
 	    else if (self->model->op->has_flag(self->model, idx_model, ITEM_MARKED))
-	    {
-		attr = (idx_filter == self->current) ? attr_select : attr_mark;
-	    }
+		attr = _puls_hl_attrs[is_current ? PULSATTR_MARKED_SEL : PULSATTR_MARKED].attr;
+	    else if (self->model->op->has_flag(self->model, idx_model, ITEM_TITLE))
+		attr = _puls_hl_attrs[is_current ? PULSATTR_TITLE_SEL : PULSATTR_TITLE].attr;
 
 	    if (menu_mode)
 	    {
 		if (self->model->op->has_flag(self->model, idx_model, ITEM_DISABLED))
 		    self->hl_menu->shortcut_attr = attr;
 		else
-		    self->hl_menu->shortcut_attr = (idx_filter == self->current)
-			? _puls_hl_attrs[PULSATTR_SHORTCUT_SEL].attr
-			: _puls_hl_attrs[PULSATTR_SHORTCUT].attr;
+		    self->hl_menu->shortcut_attr =
+			_puls_hl_attrs[is_current ? PULSATTR_SHORTCUT_SEL : PULSATTR_SHORTCUT].attr;
 	    }
 
 	    text = self->model->op->get_display_text(self->model, idx_model);
@@ -3399,8 +3667,33 @@ _puls_redraw(_self)
     self->need_redraw = 0;
 
     CLASS_DELETE(writer);
+}
 
-    windgoto(msg_row, msg_col);
+    static void
+_puls_move_cursor(_self)
+    void* _self;
+{
+    METHOD(PopupList, move_cursor);
+    int row, col;
+    if (self->border->input_active && self->line_edit)
+    {
+	/* TODO: let the LineEdit place the cursor */
+	row = self->line_edit->position.top;
+	col = self->line_edit->text ? mb_string2cells(self->line_edit->text, -1) : 0;
+	if (col >= self->line_edit->position.width)
+	    col = _box_right(&self->line_edit->position);
+	else
+	    col = self->line_edit->position.left + col;
+    }
+    else
+    {
+	row = self->current - self->first;
+	if (row < 0 || row >= self->position.height)
+	    return;
+	row = self->position.top + row;
+	col = self->position.left + self->position.width - 1;
+    }
+    windgoto(row, col);
 }
 
     static void
@@ -3438,11 +3731,26 @@ _puls_on_filter_change(_self, data)
     void* data;
 {
     METHOD(PopupList, on_filter_change);
-    self->filter->op->set_text(self->filter, self->line_edit->text);
+    int icur, item_count;
 
+    /* remember the index of the current item and try to find it in the filtered list
+     * when the number of matching items grows */
+    icur = self->filter->op->get_model_index(self->filter, self->current);
+    if (icur >= 0)
+	item_count = self->filter->op->get_item_count(self->filter);
+
+    self->filter->op->set_text(self->filter, self->line_edit->text);
     self->filter->op->filter_items(self->filter);
-    if (self->current >= self->filter->op->get_item_count(self->filter))
+    if (icur < 0)
 	self->op->set_current(self, 0);
+    else
+    {
+	if (item_count <= self->filter->op->get_item_count(self->filter))
+	    icur = self->filter->op->get_index_of(self->filter, icur);
+	else 
+	    icur = 0;
+	self->op->set_current(self, icur);
+    }
     self->need_redraw |= PULS_REDRAW_ALL;
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 
@@ -3453,8 +3761,9 @@ _puls_on_filter_change(_self, data)
 }
 
     static int
-_puls_do_isearch(_self)
+_puls_do_isearch(_self, dir)
     void* _self;
+    int   dir;
 {
     METHOD(PopupList, do_isearch);
     int item_count, start, end, step, i, idx_model;
@@ -3464,12 +3773,28 @@ _puls_do_isearch(_self)
 
     item_count = self->filter->op->get_item_count(self->filter);
     start = self->isearch->start;
-    if (start < 0 || start >= item_count)
-	start = 0;
-    end = item_count;
+    if (dir > 0)
+    {
+	dir = 1;
+	if (start < 0 || start >= item_count)
+	    start = 0;
+	end = item_count-1;
+	if (start >= end)
+	    return 0;
+    }
+    else
+    {
+	dir = -1;
+	if (start < 0 || start >= item_count)
+	    start = item_count - 1;
+	end = 0;
+	if (start <= end)
+	    return 0;
+    }
+
     for (step = 0; step < 2; step++)
     {
-	for(i = start; i < end; i++)
+	for(i = start; i != end + dir; i += dir)
 	{
 	    idx_model = self->filter->op->get_model_index(self->filter, i);
 	    text = self->model->op->get_display_text(self->model, idx_model);
@@ -3480,9 +3805,9 @@ _puls_do_isearch(_self)
 		break;
 	    }
 	}
-	/* XXX: wrap around on isearch ... could make it optional */
+	/* wrap around on isearch ... XXX: could make it optional */
 	end = start;
-	start = 0;
+	start = (dir > 0) ? 0 : item_count - 1;
     }
 
     if (step < 99)
@@ -3505,7 +3830,7 @@ _puls_on_isearch_change(_self, data)
 	self->hl_isearch->op->set_pattern(self->hl_isearch, self->isearch->text);
     */
 
-    self->op->do_isearch(self);
+    self->op->do_isearch(self, 1);
 }
 
 /* TODO: create a real factory class. */
@@ -3635,12 +3960,25 @@ _puls_do_command(_self, command)
 	}
 	return 1;
     }
-    else if (EQUALS(command, "isearch-next")) {
+    else if (EQUALS(command, "input-clear")) {
+	if (self->line_edit)
+	{
+	    if (self->line_edit->len)
+	    {
+		self->line_edit->op->set_text(self->line_edit, "");
+		self->line_edit->change_obsrvrs.op->notify(&self->line_edit->change_obsrvrs, NULL);
+	    }
+	}
+	return 1;
+    }
+    else if (EQUALS(command, "isearch-next") || EQUALS(command, "isearch-prev")) {
 	if (self->isearch && *self->isearch->text)
 	{
+	    int dir;
 	    int cur = self->current;
-	    self->isearch->start = self->current + 1;
-	    if (! self->op->do_isearch(self))
+	    dir = EQUALS(command, "isearch-next") ? 1 : -1;
+	    self->isearch->start = self->current + dir;
+	    if (! self->op->do_isearch(self, dir))
 		self->op->set_current(self, cur);
 	}
 	return 1;
@@ -3663,6 +4001,15 @@ _puls_do_command(_self, command)
 	{
 	    self->filter->op->set_matcher(self->filter, matcher);
 	    self->hl_filter->op->set_matcher(self->hl_filter, matcher);
+	    self->op->on_filter_change(self, NULL); /* to trigger filtering */
+	    self->need_redraw |= PULS_REDRAW_ALL;
+	}
+	return 1;
+    }
+    else if (EQUALS(command, "filter-toggle-titles")) {
+	if (self->model->has_title_items)
+	{
+	    self->filter->keep_titles = !self->filter->keep_titles;
 	    self->op->on_filter_change(self, NULL); /* to trigger filtering */
 	    self->need_redraw |= PULS_REDRAW_ALL;
 	}
@@ -3773,6 +4120,152 @@ _forced_redraw()
     out_flush();
 }
 
+    static void
+_puls_switch_mode(_self, modename)
+    void* _self;
+    char_u* modename;
+{
+    METHOD(PopupList, switch_mode);
+    SimpleKeymap_T* modemap;
+    int has_input = 0;
+
+    modemap = self->km_normal;
+    if (!modename || !*modename || EQUALS(modename, self->km_normal->name))
+	modemap = self->km_normal;
+    else if (EQUALS(modename, self->km_filter->name))
+    {
+	modemap = self->km_filter;
+	has_input = 1;
+    }
+    else if (EQUALS(modename, self->km_search->name))
+    {
+	modemap = self->km_search;
+	has_input = 1;
+    }
+    else if (EQUALS(modename, self->km_shortcut->name))
+    {
+	if (self->model->has_shortcuts)
+	    modemap = self->km_shortcut;
+	else
+	    modemap = self->km_normal;
+    }
+
+    if (modemap == self->modemap)
+	return;
+
+    /* exit current mode */
+    self->line_edit->change_obsrvrs.op->remove_obj(&self->line_edit->change_obsrvrs, self);
+
+    /* enter new mode */
+    self->modemap = modemap;
+    if (self->border)
+	self->border->op->set_input_active(self->border, has_input);
+    if (modemap == self->km_filter)
+    {
+	self->line_edit->change_obsrvrs.op->add(&self->line_edit->change_obsrvrs,
+		self, _puls_on_filter_change);
+	self->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: use set_max_len() to trim the current value */
+	self->line_edit->op->set_text(self->line_edit, self->filter->text);
+    }
+    else if (modemap == self->km_search)
+    {
+	self->isearch->start = self->current;
+	self->line_edit->change_obsrvrs.op->add(&self->line_edit->change_obsrvrs,
+		self, _puls_on_isearch_change);
+	self->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: use set_max_len() to trim the current value */
+	self->line_edit->op->set_text(self->line_edit, self->isearch->text);
+    }
+}
+
+static char_u cmd_quit[] = "quit";
+static char_u cmd_accept[] = "accept";
+
+    static int
+_puls_process_command(_self, command)
+    void* _self;
+    char_u* command;
+{
+    METHOD(PopupList, process_command);
+    ItemProvider_T *pmodel;
+    WindowBorder_T *pborder;
+    pborder = self->border;
+    pmodel = self->model;
+
+    /* TODO: find better names for actions
+     *    accept -> itemselected/itemactivated
+     *    quit   -> cancel
+     * TODO: change the names of the result returned from the PULS
+     *    accept -> ok         after itemclicked
+     *    quit   -> cancel     after escape
+     *    abort                when terminated with ctrl-c or similar
+     *    done                 the action was already executed by the provider
+     * */
+    if (EQUALS(command, cmd_quit))
+	return PULS_LOOP_BREAK;
+    else if (EQUALS(command, cmd_accept))
+    {
+	int cont;
+	int idx_model = self->filter->op->get_model_index(self->filter, self->current);
+
+	if (pmodel->op->has_flag(pmodel, idx_model, ITEM_DISABLED | ITEM_SEPARATOR))
+	    return PULS_LOOP_CONTINUE;
+
+	/* select_item(), cont:
+	 *	 0 - let the caller handle it
+	 *	 1 - remain in the event loop; update the items, they may have changed
+	 *	-1 - exit the loop; return the result 'done' (executed by the handler)
+	 */
+	cont = pmodel->op->select_item(pmodel, idx_model);
+	if (cont == 0)
+	    return PULS_LOOP_BREAK;
+	else if (cont == 1)
+	{
+	    self->need_redraw |= PULS_REDRAW_ALL | PULS_REDRAW_RESIZE;
+	    self->op->set_current(self, 0);
+	    return PULS_LOOP_CONTINUE;
+	}
+	else
+	{
+	    /* TODO: change command to "done" */
+	    return PULS_LOOP_BREAK;
+	}
+    }
+    else if (STARTSWITH(command, "accept:"))
+    {
+	int cont;
+	int idx_model = self->filter->op->get_model_index(self->filter, self->current);
+
+	if (pmodel->op->has_flag(pmodel, idx_model, ITEM_DISABLED | ITEM_SEPARATOR))
+	    return PULS_LOOP_CONTINUE;
+
+	return PULS_LOOP_BREAK;
+    }
+    else if (STARTSWITH(command, "done:"))
+    {
+	return PULS_LOOP_BREAK;
+    }
+    else if (STARTSWITH(command, "modeswitch:"))
+    {
+	LOG(("%s", command));
+	command += 11; /* skip past : */
+	self->op->switch_mode(self, command);
+	self->need_redraw |= PULS_REDRAW_FRAME;
+	return PULS_LOOP_CONTINUE;
+    }
+    else if (self->op->do_command(self, command))
+    {
+	return PULS_LOOP_CONTINUE;
+    }
+    else
+    {
+	char_u* next_command;
+	next_command = pmodel->op->handle_command(pmodel, self, command);
+    }
+
+    return PULS_LOOP_CONTINUE;
+}
+
+
     static int
 _puls_test_loop(pplist, rettv)
     PopupList_T* pplist;
@@ -3789,35 +4282,32 @@ _puls_test_loop(pplist, rettv)
     char_u *ps;
     dictitem_T* seqmap;
     char_u* command;
-    int seq_len, key, found, prev_found;
+    int rv, seq_len, key, found, prev_found;
 
     pborder = pplist->border;
     pmodel = pplist->model;
-    ps = pmodel->op->get_title(pmodel);
-    if (ps != NULL)
-	pplist->op->set_title(pplist, ps);
 
-    if (pplist->current >= pmodel->op->get_item_count(pmodel))
-	pplist->current = pmodel->op->get_item_count(pmodel) - 1;
-    if (pplist->current < 0)
-	pplist->current = 0;
+    /* make sure the current item is displayed */
+    pplist->op->set_current(pplist, pplist->current);
 
-    modemap = pplist->km_normal;
     ps = sequence;
     *ps = NUL;
     pplist->need_redraw = PULS_REDRAW_ALL;
     found = KM_NOTFOUND;
     for (;;)
     {
+	modemap = pplist->modemap;
 	if (pborder)
 	{
-	    vim_snprintf(buf, 32, "%d/%d/%d", pplist->current + 1,
-		    pplist->filter->op->get_item_count(pplist->filter),
-		    pmodel->op->get_item_count(pmodel));
+	    int nf = pplist->filter->op->get_item_count(pplist->filter);
+	    int nt = pmodel->op->get_item_count(pmodel);
+	    if (nf == nt)
+		vim_snprintf(buf, 32, "%d/%d", pplist->current + 1, nt);
+	    else
+		vim_snprintf(buf, 32, "%d/%d(%d)", pplist->current + 1, nf, nt);
 	    pborder->op->set_info(pborder, buf);
 	    if (pplist->need_redraw)
 	    {
-		char_u buf[16];
 		if (modemap && pborder->input_active)
 		{
 		    TextMatcher_T* ptm = NULL;
@@ -3830,6 +4320,8 @@ _puls_test_loop(pplist, rettv)
 		    else 
 			sprintf(buf, " %c", modemap->mode_char);
 		}
+		else if (modemap == pplist->km_shortcut)
+		    sprintf(buf, "&&");
 		else 
 		    buf[0] = NUL;
 		pborder->op->set_mode_text(pborder, buf);
@@ -3854,35 +4346,35 @@ _puls_test_loop(pplist, rettv)
 	{
 	    pborder->op->draw_bottom(pborder);
 	}
-#if 0   /* XXX: Diagnostic code */
-	int	attr = highlight_attr[HLF_PNI];
-	int	tl = 0;
-	{
-	    sprintf(buf, " Key: %d ", key);
-	    screen_puts_len(buf, STRLEN(buf), msg_row, msg_col+tl, attr);
-	    tl += STRLEN(buf);
-	}
-	if (modemap == pplist->km_normal)
-	{
-	    screen_puts_len("NORMAL", 6, msg_row, msg_col+tl, attr);
-	    tl += 6;
-	}
-	if (modemap == pplist->km_filter)
-	{
-	    screen_puts_len("FILTER: ", 8, msg_row, msg_col+tl, attr);
-	    tl += 8;
-	    int l = (int)STRLEN(pplist->filter->text);
-	    screen_puts_len(pplist->filter->text, l, msg_row, msg_col+tl, attr);
-	    tl += l;
-	}
-	screen_fill(msg_row, msg_row + 1, tl, Columns+1, ' ', ' ', attr);
-#endif
+	pplist->op->move_cursor(pplist);
 
 	key = _getkey();
 	ps = key_to_str(key, ps);
 	seq_len = ps - sequence;
 	if (seq_len < 1)
 	    continue;
+
+	/* TODO: (maybe) mb_len(sequence) == 1 and mb_isalnum(sequence) */
+	if (isalnum(*sequence) && pmodel->has_shortcuts && modemap == pplist->km_shortcut
+		&& !pplist->filter->op->is_active(pplist->filter))
+	{
+	    int isshrt, next, unique;
+	    isshrt = pmodel->op->find_shortcut(pmodel, sequence, pplist->current+1, &next, &unique);
+	    if (isshrt)
+	    {
+		pplist->op->set_current(pplist, next);
+		if (unique)
+		{
+		    command = cmd_accept;
+		    rv = pplist->op->process_command(pplist, command);
+		    if (rv == PULS_LOOP_BREAK)
+			break;
+		}
+	    }
+	    ps = sequence;
+	    found = KM_NOTFOUND;
+	    continue;
+	}
 
 	prev_found = found;
 	found = modemap->op->find_key(modemap, sequence);
@@ -3913,120 +4405,20 @@ _puls_test_loop(pplist, rettv)
 	command = modemap->op->get_command(modemap, sequence, 0 /* don't create a copy */ );
 	ps = sequence;
 	*ps = NUL;
-	if (! command) /* only true if there is a bug somewhere */
+	if (command) /* command is NULL only if there is a bug somewhere */
 	{
-	    continue;
-	}
-
-	/* TODO: find better names for actions
-	 *    accept -> itemselected/itemactivated
-	 *    quit   -> cancel
-	 * TODO: change the names of the result returned from the PULS
-	 *    accept -> ok         after itemclicked
-	 *    quit   -> cancel     after escape
-	 *    abort                when terminated with ctrl-c or similar
-	 *    done                 the action was already executed by the provider
-	 * */
-	if (EQUALS(command, "quit"))
-	    break;
-	else if (EQUALS(command, "accept"))
-	{
-	    int cont;
-	    int idx_model = pplist->filter->op->get_model_index(pplist->filter, pplist->current);
-
-	    if (pmodel->op->has_flag(pmodel, idx_model, ITEM_DISABLED | ITEM_SEPARATOR))
-		continue;
-
-	    /* select_item(), cont:
-	     *	 0 - let the caller handle it
-	     *	 1 - remain in the event loop; update the items, they may have changed
-	     *	-1 - exit the loop; return the result 'done' (executed by the handler)
-	     */
-	    cont = pmodel->op->select_item(pmodel, idx_model);
-	    if (cont == 0)
+	    rv = pplist->op->process_command(pplist, command);
+	    if (rv == PULS_LOOP_BREAK)
 		break;
-	    else if (cont == 1)
-	    {
-		pplist->need_redraw |= PULS_REDRAW_ALL | PULS_REDRAW_RESIZE;
-		pplist->op->set_current(pplist, 0);
-		continue;
-	    }
-	    else
-	    {
-		/* TODO: change command to "done" */
-		break;
-	    }
-	}
-	else if (STARTSWITH(command, "accept:"))
-	{
-	    int cont;
-	    int idx_model = pplist->filter->op->get_model_index(pplist->filter, pplist->current);
-
-	    if (pmodel->op->has_flag(pmodel, idx_model, ITEM_DISABLED | ITEM_SEPARATOR))
-		continue;
-
-	    break;
-	}
-	else if (STARTSWITH(command, "done:"))
-	{
-	    break;
-	}
-	else if (EQUALS(command, "modeswitch:normal"))
-	{
-	    /* TODO: a function that will handle mode switches + events exit-mode, enter-mode */
-	    pplist->line_edit->change_obsrvrs.op->remove_obj(&pplist->line_edit->change_obsrvrs, pplist);
-	    modemap = pplist->km_normal;
-	    if (pborder)
-		pborder->op->set_input_active(pborder, 0);
-	    pplist->need_redraw |= PULS_REDRAW_FRAME;
-	    continue;
-	}
-	else if (EQUALS(command, "modeswitch:filter"))
-	{
-	    modemap = pplist->km_filter;
-	    if (pborder)
-	    {
-		pplist->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: set_max_len to trim the current value */
-		pplist->line_edit->op->set_text(pplist->line_edit, pplist->filter->text);
-		pborder->op->set_input_active(pborder, 1);
-	    }
-	    pplist->need_redraw |= PULS_REDRAW_FRAME;
-	    pplist->line_edit->change_obsrvrs.op->add(&pplist->line_edit->change_obsrvrs,
-		    pplist, _puls_on_filter_change);
-	    continue;
-	}
-	else if (EQUALS(command, "modeswitch:isearch"))
-	{
-	    modemap = pplist->km_search;
-	    if (pborder)
-	    {
-		pplist->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: use set_max_len() to trim the current value */
-		pplist->line_edit->op->set_text(pplist->line_edit, pplist->isearch->text);
-		pborder->op->set_input_active(pborder, 1);
-	    }
-	    pplist->need_redraw |= PULS_REDRAW_FRAME;
-	    pplist->isearch->start = pplist->current;
-	    pplist->line_edit->change_obsrvrs.op->add(&pplist->line_edit->change_obsrvrs,
-		    pplist, _puls_on_isearch_change);
-	    continue;
-	}
-	else if (pplist->op->do_command(pplist, command))
-	{
-	    continue;
-	}
-	else
-	{
-	    char_u* next_command;
-	    next_command = pmodel->op->handle_command(pmodel, pplist, command);
 	}
     }
 
     /* TODO: consider that there could be multiple overlapping boxes */
     _forced_redraw();
 
-    int	    rv = OK;
     dict_T  *d = dict_alloc();
 
+    rv = OK;
     if (!d)
 	rv = FAIL;
     else
@@ -4036,6 +4428,8 @@ _puls_test_loop(pplist, rettv)
 	++d->dv_refcount;
 
 	dict_add_nr_str(d, "status", 0, command);
+	if (pplist->modemap)
+	    dict_add_nr_str(d, "mode", 0, pplist->modemap->name);
 
 	if (EQUALS(command, "accept") || STARTSWITH(command, "accept:"))
 	    pplist->op->prepare_result(pplist, d);
@@ -4062,12 +4456,16 @@ _puls_test_loop(pplist, rettv)
  *	    The commands can be assigned to keysequences.
  *	options.pos
  *	    The placement of the popup window.
- *	options.filter
- *	    The filtering algorithm.
+ *	options.mode
+ *	    The popuplist mode to start with.
+ *	// options.filter
+ *	//    The filtering algorithm.
  *
  *  When the list processing is done, the function returns a result in a
  *  dictionary:
  *	rv.status	'accept' or 'cancel'  XXX: ?
+ *	rv.mode		the name of the currently active popuplist mode
+ *  When rv.status is 'accept':
  *	rv.current	currently selected item
  *	rv.marked	list of marked item indices
  *
@@ -4075,9 +4473,10 @@ _puls_test_loop(pplist, rettv)
  *
  *  Use examples:
  *    let alist = ["1", "2", "three"]
- *    let rv = popuplist("buffers")
  *    let rv = popuplist(alist, "Some list")
  *    let rv = popuplist(alist, "Some list", { 'pos': '11' })
+ *    let rv = popuplist("buffers")
+ *    let rv = popuplist("nmenu")
  *
  */
     int
@@ -4094,6 +4493,7 @@ puls_test(argvars, rettv)
     char_u* title = NULL;
     list_T* items = NULL;
     dict_T* options = NULL;
+    int rv;
 
     /*_init_vtables();*/
     _update_hl_attrs();
@@ -4143,7 +4543,7 @@ puls_test(argvars, rettv)
 	    model = (ItemProvider_T*) bmodel;
 	}
 #endif
-/* TODO: #ifdef FEAT_POPUPLIST_MENU*/
+#ifdef FEAT_POPUPLIST_MENUS
 	if (EQUALS(special_items, "menu") || EQUALS(special_items+1, "menu"))
 	{
 	    LOG(("Menu"));
@@ -4154,10 +4554,12 @@ puls_test(argvars, rettv)
 		/* TODO: errmsg: invalid menu mode '%special_items' */
 		return FAIL;
 	    }
+	    mmodel->op->find_menu(mmodel, title);
+	    title = NULL;
 	    mmodel->op->list_items(mmodel, NULL);
 	    model = (ItemProvider_T*) mmodel;
 	}
-/*#endif*/
+#endif
 #if defined(INCLUDE_TESTS)
 	static char str_pulslog[] = "pulslog";
 	if (EQUALS(special_items, "test-command-t"))
@@ -4169,6 +4571,8 @@ puls_test(argvars, rettv)
 	if (EQUALS(special_items, "pulslog"))
 	{
 	    LOG(("PULS LOG"));
+	    if (PULSLOG.lv_refcount < 1)
+		PULSLOG.lv_refcount = 1;
 	    VimlistItemProvider_T* vlmodel = new_VimlistItemProvider();
 	    vlmodel->op->set_list(vlmodel, &PULSLOG);
 	    model = (ItemProvider_T*) vlmodel;
@@ -4227,8 +4631,11 @@ puls_test(argvars, rettv)
     pplist->op->reposition(pplist);
     model->op->on_start(model);
 
-    /* process the list */
-    int rv = _puls_test_loop(pplist, rettv);
+    if (did_emsg)
+	rv = FAIL;
+    else
+	/* process the list */
+	rv = _puls_test_loop(pplist, rettv);
 
     CLASS_DELETE(pplist);
     CLASS_DELETE(aligner);

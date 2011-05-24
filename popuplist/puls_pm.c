@@ -27,14 +27,16 @@
 
 /* [ooc]
  *
-  // TODO: , variant FEAT_POPUPLIST_MENU]
-  class MenuItemProvider(ItemProvider) [mnupr]
+  class MenuItemProvider(ItemProvider) [mnupr, variant FEAT_POPUPLIST_MENUS]
   {
     vimmenu_T*  top_menu;  // the initial menu to be displayed; gui_find_menu
     vimmenu_T*  cur_menu;  // the currently displayed menu
-    int		mode;      // the mode where the menu is executed
+    int		mode;      // the mode where the menu is executed (one of MODE_INDEX_*)
     void	init();
     void	destroy();
+    // find the root menu to display
+    void	find_menu(char_u* menu_path);
+    void	update_title();
     int		parse_mode(char_u* command);
     int		list_items(void* selected);
     int		select_item(int item);
@@ -53,7 +55,8 @@ _mnupr_init(_self)
     METHOD(MenuItemProvider, init);
     self->top_menu = root_menu;
     self->cur_menu = self->top_menu;
-    self->mode = MENU_NORMAL_MODE;
+    self->mode = MENU_INDEX_NORMAL;
+    self->has_shortcuts = 1;
 }
 
     static void
@@ -64,6 +67,47 @@ _mnupr_destroy(_self)
     END_DESTROY(MenuItemProvider);
 }
 
+    static void
+_mnupr_find_menu(_self, menu_path)
+    void*   _self;
+    char_u* menu_path;
+{
+    METHOD(MenuItemProvider, find_menu);
+    vimmenu_T* pm;
+
+    if (!menu_path || !*menu_path)
+	pm = root_menu;
+    else
+    {
+	pm = gui_find_menu(menu_path); /* XXX: this may create an error !!! */
+	if (pm)
+	    pm = pm->children;
+	else
+	    pm = root_menu;
+    }
+
+    self->top_menu = pm;
+    self->cur_menu = self->top_menu;
+    self->op->update_title(self);
+}
+
+    static void
+_mnupr_update_title(_self)
+    void*   _self;
+{
+    METHOD(MenuItemProvider, update_title);
+    char_u* title;
+    if (self->cur_menu == root_menu || !self->cur_menu->parent || self->cur_menu->parent == root_menu)
+	self->op->set_title(self, "Menu");
+    else
+    {
+	title = self->cur_menu->parent->dname;
+	if (title && *title == ']')
+	    ++title;
+	self->op->set_title(self, title);
+    }
+}
+
     static int
 _mnupr_parse_mode(_self, command)
     void* _self;
@@ -72,32 +116,35 @@ _mnupr_parse_mode(_self, command)
     METHOD(MenuItemProvider, parse_mode);
     if (EQUALS(command, "menu"))
     {
-	self->mode = MENU_NORMAL_MODE;
+	self->mode = MENU_INDEX_NORMAL;
 	return 1;
     }
+    if (!EQUALS(command+1, "menu"))
+	return 0;
+
     /* based on get_menu_cmd_modes */
     switch(command[0])
     {
 	case 'v':
-	    self->mode = MENU_VISUAL_MODE;
+	    self->mode = MENU_INDEX_VISUAL;
 	    return 1;
 	case 's':
-	    self->mode = MENU_SELECT_MODE;
+	    self->mode = MENU_INDEX_SELECT;
 	    return 1;
 	case 'o':
-	    self->mode = MENU_OP_PENDING_MODE;
+	    self->mode = MENU_INDEX_OP_PENDING;
 	    return 1;
 	case 'i':
-	    self->mode = MENU_INSERT_MODE;
+	    self->mode = MENU_INDEX_INSERT;
 	    return 1;
 	case 't':
-	    self->mode = MENU_TIP_MODE;
+	    self->mode = MENU_INDEX_TIP;
 	    return 1;
 	case 'c':
-	    self->mode = MENU_CMDLINE_MODE;
+	    self->mode = MENU_INDEX_CMDLINE;
 	    return 1;
 	case 'n':
-	    self->mode = MENU_NORMAL_MODE;
+	    self->mode = MENU_INDEX_NORMAL;
 	    return 1;
     }
     return 0;
@@ -112,17 +159,19 @@ _mnupr_list_items(_self, selected)
     vimmenu_T* pm;
     PopupItem_T* pit;
     int len, isel, i;
-    int mode = self->mode;
+    int mode_flag = (1 << self->mode);
     self->op->clear_items(self);
 
-    /*LOG(("Menu s:%04x m:%04x %s", State, mode, self->cur_menu->name));*/
+    /*LOG(("Menu s:%04x m:%04x re:%c %s", State, mode, restart_edit & 0xff, self->cur_menu->name));*/
 
     isel = -1;
     i = 0;
     for (pm = self->cur_menu; pm != NULL; pm = pm->next)
     {
-	/*LOG(("  m:%04x e:%04x %s", pm->modes, pm->enabled, pm->name));*/
-	if (menu_is_separator(pm->name))
+	/* menu_is_hidden is static; the condition ']' is copied from there */
+	if (!pm->dname || *pm->dname == ']' || menu_is_popup(pm->dname)  || menu_is_toolbar(pm->dname))
+	    continue;
+	if (menu_is_separator(pm->dname))
 	{
 	    pit = self->op->append_pchar_item(self, g_separator, ITEM_SHARED);
 	    if (pit)
@@ -139,14 +188,14 @@ _mnupr_list_items(_self, selected)
 	    if (pit)
 	    {
 		pit->data = (void*)pm;
-		if (!(pm->modes & mode) || !(pm->enabled & mode))
+		if (!(pm->modes & mode_flag) || !(pm->enabled & mode_flag))
 		{
 		    pit->flags |= ITEM_DISABLED;
 		}
 
 		if (pm == selected && isel < 0)
 		    isel = i;
-		i++;
+		++i;
 	    }
 	}
     }
@@ -177,6 +226,7 @@ _mnupr_select_item(_self, item)
 	 * window stack (when we return 1) which is not implemented, yet.
 	 * ATM we replace the contents of the current puls and continue. */
 	self->cur_menu = pm->children;
+	self->op->update_title(self);
 	self->op->list_items(self, NULL);
 	return 1;
     }
@@ -184,8 +234,19 @@ _mnupr_select_item(_self, item)
     {
 	int mode = self->mode;
 	/* TODO: More has to be done for menus in visual mode.
-	 * By default the menu is shown for every selected line. */
-	gui_menu_cb(pm);
+	 * By default the menu is shown for every selected line.
+	 * Unfortunately built-in functions don't accept a range. */
+
+	/* This works both in console and in gui */
+	if (mode != MENU_INDEX_INVALID && pm->strings[mode] != NULL)
+	    exec_normal_cmd(pm->strings[mode], pm->noremap[mode], pm->silent[mode]);
+
+	/* ins_typebuf doesn't work from puls */
+	/*if (mode != MENU_INDEX_INVALID && pm->strings[mode] != NULL)*/
+	/*    ins_typebuf(pm->strings[mode], pm->noremap[mode], 0, TRUE, pm->silent[mode]);*/
+	/* gui_menu_cb only works in GUI */
+	/*gui_menu_cb(pm);*/
+
 	return -1;
     }
 }
@@ -210,6 +271,7 @@ _mnupr_select_parent(_self)
     else
 	parent = self->top_menu;
     self->cur_menu = parent;
+    self->op->update_title(self);
     icur = self->op->list_items(self, cur);
     if (icur < 0)
 	icur = 0;

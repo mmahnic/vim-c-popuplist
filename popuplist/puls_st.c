@@ -520,6 +520,10 @@ _sgarr_sort(_self, cmp)
 	self->op->_qsort(self, 0, self->len-1, cmp);
 }
 
+/* FIXME: if cmp doesn't give consistent results (is not a well-ordering), _qsort will crash.
+ * Example: Because of a bug in _flcmpttsc_compare a comparison was done
+ * between filter_parent_score and filter_score. This caused the stack to grow
+ * to 7k items and _qsort crashed. */
     static void
 _sgarr__qsort (_self, low, high, cmp)
     void* _self;
@@ -778,5 +782,149 @@ _itsgarr_next(_self)
 
     pseg += (self->iitem % self->array->segment_len) * self->array->item_size;
     return pseg;
+}
+
+/* [ooc]
+ *
+  // Observer pattern
+  typedef int (*MethodCallback_Fn)(void* _self, void* _data);
+  struct NotificationCallback [ntfcb]
+  {
+    NotificationCallback* next;
+    void*   instance_self;
+    MethodCallback_Fn callback;
+    void init();
+    int  call(void* data);
+  };
+
+  class NotificationList [ntlst]
+  {
+    NotificationCallback* observers;
+    ListHelper lst_observers;
+    void init();
+    void destroy();
+    void notify(void* _data);
+    void add(void* instance, MethodCallback_Fn callback);
+    void remove_obj(void* instance);
+    void remove_cb(MethodCallback_Fn callback);
+  };
+*/
+
+    static void
+_ntfcb_init(_self)
+    void* _self;
+{
+    METHOD(NotificationCallback, init);
+    self->next = NULL;
+    self->instance_self = NULL;
+    self->callback = NULL;
+}
+
+    static int
+_ntfcb_call(_self, _data)
+    void* _self;
+    void* _data;
+{
+    METHOD(NotificationCallback, call);
+    if (! self->callback)
+	return 0;
+    return (*self->callback)(self->instance_self, _data);
+}
+
+    static void
+_ntlst_init(_self)
+    void* _self;
+{
+    METHOD(NotificationList, init);
+    self->observers = NULL;
+    self->lst_observers.first = (void**)&self->observers;
+    self->lst_observers.offs_next = offsetof(NotificationCallback_T, next);
+    /* items don't need destruction, so we don't set lst_observers.fn_destroy */
+}
+
+    static void
+_ntlst_destroy(_self)
+    void* _self;
+{
+    METHOD(NotificationList, destroy);
+    NotificationCallback_T* pit;
+    while (self->observers)
+    {
+	pit = self->observers;
+	self->observers = self->observers->next;
+	vim_free(pit);
+    }
+    END_DESTROY(NotificationList);
+}
+
+    static void
+_ntlst_notify(_self, _data)
+    void* _self;
+    void* _data;
+{
+    METHOD(NotificationList, notify);
+    NotificationCallback_T* pit;
+    pit = self->observers;
+    while (pit)
+    {
+	_ntfcb_call(pit, _data);
+	pit = pit->next;
+    }
+}
+
+    static void
+_ntlst_add(_self, instance, callback)
+    void* _self;
+    void* instance;
+    MethodCallback_Fn callback;
+{
+    METHOD(NotificationList, add);
+    NotificationCallback_T *pnew;
+    pnew = new_NotificationCallback();
+    pnew->instance_self = instance;
+    pnew->callback = callback;
+    self->lst_observers.op->add_tail(&self->lst_observers, pnew);
+}
+
+    static int
+_fn_match_callback_instance(matcher, item)
+    ItemMatcher_T* matcher;
+    NotificationCallback_T* item;
+{
+    return (matcher->extra == item->instance_self);
+}
+
+    static void
+_ntlst_remove_obj(_self, instance)
+    void* _self;
+    void* instance;
+{
+    METHOD(NotificationList, remove_obj);
+    ItemMatcher_T cmp;
+    init_ItemMatcher(&cmp);
+    cmp.fn_match = &_fn_match_callback_instance;
+    cmp.extra = instance;
+    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
+}
+
+    static int
+_fn_match_callback_callback(matcher, item)
+    ItemMatcher_T* matcher;
+    NotificationCallback_T* item;
+{
+    return (matcher->extra == item->callback);
+}
+
+    static void
+_ntlst_remove_cb(_self, callback)
+    void* _self;
+    MethodCallback_Fn callback;
+{
+    METHOD(NotificationList, remove_cb);
+    ItemMatcher_T cmp;
+    init_ItemMatcher(&cmp);
+    cmp.fn_match = &_fn_match_callback_callback;
+    cmp.extra = callback;
+    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
 }
 

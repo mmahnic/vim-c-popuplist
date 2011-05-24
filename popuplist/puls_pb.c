@@ -89,15 +89,6 @@ _bprov_read_options(_self, options)
     METHOD(BufferItemProvider, read_options);
     dictitem_T* option;
 
-    /* XXX: Options for options
-     * The options can be provided by the user every time or they can be remembered
-     * between runs.
-     * To remember them we could have a static structure that would be created
-     * the first time BufferItemProvider is executed.
-     * The other possibility is to let the user handle the options for each use-case
-     * in vimscript; in this case we pass the command 'option-changed' to the
-     * script after an option is changed.
-     */
     option = dict_find(options, "unlisted", -1L);
     if (option && option->di_tv.v_type == VAR_NUMBER)
     {
