@@ -105,12 +105,13 @@ _imtchr_match(_self, item)
     void**  last;          // ponts to the pointer to the last item of the list (optional)
     Destroy_Fn fn_destroy; // a function to destroy the items in delete_xxx
     short   offs_next;     // offsetof(next) in item
-    short   offs_prev;     // offsetof(prev) in item (optional)
+    // short   offs_prev;     // offsetof(prev) in item (optional)
     void    init();
     void    destroy();
     void    add_head(void* item);
     void    add_tail(void* item);
     void*   remove(void* item);
+    void*   remove_head();
     // void*   find(ItemMatcher* cond);
     // void*   remove_first(ItemMatcher* cond);
     // int     delete_first(ItemMatcher* cond, Destroy_Fn fn_destroy);
@@ -129,7 +130,7 @@ _lsthlpr_init(_self)
     self->last = NULL;
     self->fn_destroy = NULL;
     self->offs_next = -1;
-    self->offs_prev = -1;
+    /*self->offs_prev = -1;*/
 }
 
     static void
@@ -139,6 +140,7 @@ _lsthlpr_destroy(_self)
     METHOD(ListHelper, destroy);
     END_DESTROY(ListHelper);
 }
+
     static void
 _lsthlpr_add_head(_self, item)
     void* _self;
@@ -149,6 +151,8 @@ _lsthlpr_add_head(_self, item)
     void *pit = *self->first;
     *self->first = item;
     *(void**)(item + self->offs_next) = pit;            /* item->next = pit */
+    if (self->last && ! *self->last)
+	*self->last = pit;
 }
 
     static void
@@ -160,13 +164,26 @@ _lsthlpr_add_tail(_self, item)
     /* ASSERT(self->first && self->offs_next >= 0) */
     void *pit;
     short offnext = self->offs_next;
-    if (*self->first == NULL)
+
+    if (! *self->first)
+    {
 	*self->first = item;
+	if (self->last)
+	    *self->last = item;
+    }
     else
     {
-	pit = *self->first;
-	while (*(void**)(pit + offnext) != NULL) /* while pit->next != NULL */
-	    pit = *(void**)(pit + offnext);      /* pit = pit->next */
+	if (self->last)
+	{
+	    pit = *self->last;
+	    *self->last = item;
+	}
+	else
+	{
+	    pit = *self->first;
+	    while (*(void**)(pit + offnext) != NULL) /* while pit->next != NULL */
+		pit = *(void**)(pit + offnext);      /* pit = pit->next */
+	}
 	*(void**)(pit + offnext) = item;         /* pit->next = item */
     }
     *(void**)(item + offnext) = NULL;            /* item->next = NULL */
@@ -187,6 +204,8 @@ _lsthlpr_remove(_self, item)
     {
 	pit = *self->first;
 	*self->first = *(void**)(self->first + offnext); /* first = first->next */
+	if (self->last && ! *self->first)
+	    *self->last = NULL;
 	return pit;
     }
     else
@@ -199,10 +218,30 @@ _lsthlpr_remove(_self, item)
 	    {
 		/* pit->next = pit->next->next  ... = item->next*/
 		*(void**)(pit + offnext) = *(void**)(pnext + offnext);
+		if (self->last && *self->last == item)
+		    *self->last = pit;
 		return pnext;
 	    }
 	    pit = pnext;        /* pit = pit->next */
 	}
+    }
+    return NULL;
+}
+
+    static void*
+_lsthlpr_remove_head(_self)
+    void* _self;
+{
+    METHOD(ListHelper, remove_head);
+    void* pit;
+    /* ASSERT(self->first && self->offs_next >= 0) */
+    if (*self->first)
+    {
+	pit = *self->first;
+	*self->first = *(void**)(pit + self->offs_next); /* first = first->next */
+	if (self->last && ! *self->first)
+	    *self->last = NULL;
+	return pit;
     }
     return NULL;
 }
@@ -224,6 +263,8 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
     {
 	pdel = pit;
 	pit = *(void**)(pit + offnext);    /* pit = pit->next */
+	if (self->last && *self->last == pdel)
+	    *self->last = NULL;
 	if (dodel)
 	{
 	    if (destroy)
@@ -241,6 +282,8 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
 	    pdel = pnext;
 	    /* pit->next = pit->next->next */
 	    *(void**)(pit + offnext) = *(void**)(pnext + offnext);
+	    if (self->last && *self->last == pdel)
+		*self->last = pit;
 	    if (dodel)
 	    {
 		if (destroy)
@@ -349,8 +392,12 @@ _dicti_next(_self)
   // identical size.  New segments are added to grow the array.  No
   // reallocation is done for the existing items and their addresses remain
   // fixed.
+  const SGARR_MIN_SEGMENT_ITEM_COUNT = 16;
   class SegmentedGrowArray [sgarr]
   {
+    // TODO: make all the fields 'private' and add a function to configure the array
+    //    configure(item_size[bytes], preferred_segment_size[bytes], fn_destroy);
+    // TODO: A segment should contain at least SGARR_MIN_SEGMENT_ITEM_COUNT items.
     Destroy_Fn fn_destroy;      // a function that will destroy each item
     int	    item_size;		// size of every item
     int	    len;		// actual number of items used
@@ -360,7 +407,9 @@ _dicti_next(_self)
     void**  index;
     void    init();
     void    destroy();
-    void    clear();
+    void    clear();		// clears the items in the array and frees the space used by the items
+    void    clear_contents();	// clears the items in the array, but keeps the space
+    void    truncate();		// frees the unused blocks allocated for the items
     int	    grow(int count);
     void*   get_new_item();
     void*   get_item(int index);
@@ -384,13 +433,13 @@ _sgarr_init(_self)
 }
 
     static void
-_sgarr_clear(_self)
+_sgarr_clear_contents(_self)
     void* _self;
 {
-    METHOD(SegmentedGrowArray, clear);
+    METHOD(SegmentedGrowArray, clear_contents);
     int i, j, len;
     void* pseg;
-    if (self->fn_destroy && self->index && self->len)
+    if (self->fn_destroy && self->index && self->len > 0)
     {
 	len = self->len;
 	for(i = 0; i < self->index_len && len > 0; i++)
@@ -400,21 +449,58 @@ _sgarr_clear(_self)
 	    {
 		(*self->fn_destroy)(pseg);
 		pseg += self->item_size;
-		len--;
+		--len;
 	    }
 	}
     }
+    self->len = 0;
+}
+
+    static void
+_sgarr_clear(_self)
+    void* _self;
+{
+    METHOD(SegmentedGrowArray, clear);
+    int i;
+
     if (self->index)
     {
+	if (self->len)
+	    self->op->clear_contents(self);
+
 	for (i = 0; i < self->index_len; i++)
 	    vim_free(self->index[i]);
 	vim_free(self->index);
     }
     self->index = NULL;
-    self->len = 0;
     self->index_size = 0;
     self->index_len = 0;
     self->segment_len = 0;
+}
+
+    static void
+_sgarr_truncate(_self)
+    void* _self;
+{
+    METHOD(SegmentedGrowArray, truncate);
+    int req_idxlen;
+
+    if (self->len < 1 || self->item_size < 1)
+    {
+	self->op->clear(self);
+	return;
+    }
+
+    if (self->len < 1 && self->segment_len < 1)
+	self->segment_len = 1024 / self->item_size;
+
+    req_idxlen = (self->len + self->segment_len - 1) / self->segment_len;
+    while (self->index_len > req_idxlen)
+    {
+	--self->index_len;
+	vim_free(self->index[self->index_len]);
+	self->index[self->index_len] = NULL;
+    }
 }
 
     static void
@@ -581,7 +667,7 @@ _sgarr__qsort (_self, low, high, cmp)
 
 	if (ps->todo & QS_PART)
 	{
-	    LOG(("qs %2d: PART %3d - %3d", stackitem, ps->low, ps->high));
+	    /*LOG(("qs %2d: PART %3d - %3d", stackitem, ps->low, ps->high));*/
 	    ps->todo &= ~QS_PART;
 	    l = ps->low;
 	    r = ps->high;
@@ -648,7 +734,7 @@ _sgarr__qsort (_self, low, high, cmp)
 
 	if (select == QS_LEFT)
 	{
-	    LOG(("qs %2d: LEFT %3d - %3d", stackitem, ps->low, ps->high));
+	    /*LOG(("qs %2d: LEFT %3d - %3d", stackitem, ps->low, ps->high));*/
 	    ps->todo &= (~QS_LEFT & 0xff);
 	    ni = ps->r - ps->low + 1;
 	    if (ni > 1)
@@ -663,7 +749,7 @@ _sgarr__qsort (_self, low, high, cmp)
 	}
 	else if (select == QS_RIGHT)
 	{
-	    LOG(("qs %2d: RGHT %3d - %3d", stackitem, ps->low, ps->high));
+	    /*LOG(("qs %2d: RGHT %3d - %3d", stackitem, ps->low, ps->high));*/
 	    ps->todo &= (~QS_RIGHT & 0xff);
 	    ni = ps->high - ps->l + 1;
 	    if (ni > 1)
@@ -686,7 +772,7 @@ ss_ret:
 
 simple_sort: /* 'params': ni, l */
 	/* shell sort */
-	LOG(("qs %2d: SHEL %3d - %3d", stackitem, l, l+ni-1));
+	/*LOG(("qs %2d: SHEL %3d - %3d", stackitem, l, l+ni-1));*/
 	step = (ni * 5 + 5) / 10; /* round(ni/2) */
 	while (step > 0)
 	{

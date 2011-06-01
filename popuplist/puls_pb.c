@@ -214,7 +214,7 @@ _BufferItem_cmp_path(comparator, a, b)
     PopupItem_T* a;
     PopupItem_T* b;
 {
-    return STRCMP_SORT_UP * STRCMP( ((buf_T*)a->data)->b_ffname, ((buf_T*)b->data)->b_ffname );
+    return STRCMP( ((buf_T*)a->data)->b_ffname, ((buf_T*)b->data)->b_ffname );
 }
 
 

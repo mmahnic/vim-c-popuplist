@@ -33,25 +33,34 @@
 #define EQUALS(a, b)  (0 == strcmp(a, b))
 #define EQUALSN(a, b, n)  (0 == strncmp(a, b, n))
 #define STARTSWITH(str, prefix)  (0 == strncmp(str, prefix, strlen(prefix)))
+#ifdef FEAT_MBYTE
+#define ADVANCE_CHAR_P(p) mb_ptr_adv(p)
+#else
+#define ADVANCE_CHAR_P(p) ++p
+#endif
 
 /* HACK from eval.c */
 static dictitem_T dumdi;
-static char_u blankline[] = "";
 #define DI2HIKEY(di) ((di)->di_key)
 #define HIKEY2DI(p)  ((dictitem_T *)(p - (dumdi.di_key - (char_u *)&dumdi)))
 #define HI2DI(hi)     HIKEY2DI((hi)->hi_key)
 
-/* Linux defines __compar_fn_t. Not sure about others */
-#define LT_SORT_UP	-1
-#define GT_SORT_UP	-LT_SORT_UP
-#define LT_SORT_DOWN	-LT_SORT_UP
-#define GT_SORT_DOWN	-LT_SORT_DOWN
-#define STRCMP_SORT_UP  1
-#define STRCMP_SORT_DOWN  -1
-typedef int (*__puls_compar_fn_t)(const void* a, const void* b);
+static char_u blankline[] = "";
+static char_u str_type_list[] = "<list>";
+static char_u str_type_dict[] = "<dict>";
+static char_u str_type_func[] = "<func>";
+static char_u cmd_quit[] = "quit";
+static char_u cmd_accept[] = "accept";
+static char_u fld_next_cmd[] = "nextcmd";
 
-#if 1
+#define DEBUG
+#define INCLUDE_TESTS
+
+#if (defined(INCLUDE_TESTS) || defined(DEBUG))
+static char_u str_pulstest[] = "*test*";
+static char_u str_pulslog[] = "*log*";
 static list_T PULSLOG; /* XXX: adding items to this list will create memory leaks */
+
     static void
 pulslog(char* fmt, ...)
 {
@@ -234,8 +243,10 @@ _update_hl_attrs()
     }
 }
 
-/* TODO: split into popupls_.ci and popupls_.h so that structs can be defined in arbitrary order.
- * This way it will be also possible to create multiple compilation units. */
+#if defined(FEAT_POPUPLIST_MENUS) && !defined(FEAT_MENU)
+#undef FEAT_POPUPLIST_MENUS
+#endif
+
 #include "popupls_.ci" /* created by mmoocc.py from class definitions in [ooc] blocks */
 #include "puls_st.c"
 #include "puls_tw.c"
@@ -253,30 +264,160 @@ _update_hl_attrs()
  *  WONT DO: list of C strings
  *
  * Interface:
- *  char_u* get_text(i)
+ *  DONE: char_u* get_text(i)
  *     - returns a pointer to item text, NTS
  *     - the pointer can reference a temporary value
  *  int select_item(i)
- *     - an item was selected by pressing Enter
+ *     - DONE: an item was selected by pressing Enter
  *     - if item contains subitems (hierarchical) the function can return 1 (redisplay, new items)
  *     - the provider manages level and path
  *	    int level;			the current level in a hierarchical dataset
  *	    int path[MAX_LEVELS];	the selected item in a hierarchical dataset
- *     - we need a function to move up in the hierarchy
- *	    int select_parent()	returns 1 to redisplay the list (new items)
  *     - we may want to do something with the path
  *	    char_u* get_path_text()
- *  It may take a longer time for the provider to obtain all the items. In this case 
- *  the PULS could poll the provider for new items in fixed intervals.
+ *     - DONE: we need a function to move up in the hierarchy
+ *	    int select_parent()	returns 1 to redisplay the list (new items)
+ *  DONE: (option 'nextcmd') It may take a longer time for the provider to
+ *    obtain all the items. In this case the PULS could poll the provider for
+ *    new items in fixed intervals.
  *	int get_more_items()
  *	    - 0 - no more items
  *	    - 1 - items appended to the list
  *	    - 2 - the list was modified (maybe it was sorted)
- *  The provider could respond to some actions:
+ *  DONE: The provider could respond to some actions:
  *	int exec_action(char_u* action, int current)
  *
  *  DONE: The items in the list can be marked.
  */
+
+/* [ooc]
+ *
+  class CommandQueueItem [cmdqit]
+  {
+    CommandQueueItem* next;
+    char_u* command;
+    void init();
+    void destroy();
+  }
+
+  class CommandQueue [cmdque]
+  {
+    CommandQueueItem* _cmd_list_first;
+    CommandQueueItem* _cmd_list_last;
+    ListHelper*       _commands;
+    void    init();
+    void    destroy();
+    void    add(char_u* command);
+    void    pop();
+    char_u* head();
+  };
+*/
+
+    static void
+_cmdqit_init(_self)
+    void* _self;
+{
+    METHOD(CommandQueueItem, init);
+    self->command = NULL;
+    self->next = NULL;
+}
+
+    static void
+_cmdqit_destroy(_self)
+    void* _self;
+{
+    METHOD(CommandQueueItem, destroy);
+    vim_free(self->command);
+    END_DESTROY(CommandQueueItem);
+}
+
+    static void
+_cmdque_init(_self)
+    void* _self;
+{
+    METHOD(CommandQueue, init);
+    self->_cmd_list_first = NULL;
+    self->_cmd_list_last = NULL;
+    self->_commands = new_ListHelper();
+    self->_commands->first = (void**) &self->_cmd_list_first;
+    self->_commands->last = (void**) &self->_cmd_list_last;
+    self->_commands->offs_next = offsetof(CommandQueueItem_T, next);
+    self->_commands->fn_destroy = &_cmdqit_destroy;
+}
+
+    static void
+_cmdque_destroy(_self)
+    void* _self;
+{
+    METHOD(CommandQueue, destroy);
+    self->_commands->op->delete_all(self->_commands, NULL);
+    CLASS_DELETE(self->_commands);
+    END_DESTROY(CommandQueue);
+}
+
+    static void
+_cmdque_add(_self, command)
+    void* _self;
+    char_u* command;
+{
+    METHOD(CommandQueue, add);
+    char_u *ps, *pe;
+    CommandQueueItem_T* pit;
+    if (!command || !*command)
+	return;
+    ps = command;
+    while (isspace(*ps))
+	++ps;
+    pe = vim_strchr(ps, '|');
+    while (pe)
+    {
+	command = pe + 1; /* next command */
+	--pe;
+	while (isspace(*pe) && pe > ps)
+	    --pe;
+	if (pe >= ps)
+	{
+	    pit = new_CommandQueueItem();
+	    pit->command = vim_strnsave(ps, pe-ps+1);
+	    self->_commands->op->add_tail(self->_commands, pit);
+	}
+	ps = command;
+	while (isspace(*ps))
+	    ++ps;
+	pe = vim_strchr(ps, '|');
+    }
+    pe = strchr(ps, NUL); /* find end of string; *don't* use vim_strchr! */
+    --pe;
+    while (isspace(*pe) && pe > ps)
+	--pe;
+    if (pe >= ps)
+    {
+	pit = new_CommandQueueItem();
+	pit->command = vim_strnsave(ps, pe-ps+1);
+	self->_commands->op->add_tail(self->_commands, pit);
+    }
+}
+
+    static char_u*
+_cmdque_head(_self)
+    void* _self;
+{
+    METHOD(CommandQueue, head);
+    if (! self->_cmd_list_first)
+	return NULL;
+    return self->_cmd_list_first->command;
+}
+
+    static void
+_cmdque_pop(_self)
+    void* _self;
+{
+    METHOD(CommandQueue, pop);
+    CommandQueueItem_T* pit;
+    pit = (CommandQueueItem_T*) self->_commands->op->remove_head(self->_commands);
+    if (pit)
+	vim_free(pit);
+}
 
 /* [ooc]
  *
@@ -295,8 +436,8 @@ _update_hl_attrs()
     ushort	flags;
     ushort	filter_start;
     ushort	filter_length;
-    ulong	filter_score;
     ushort	filter_parent_score; // for title items (up to 64k titles should be enough)
+    ulong	filter_score;
 
     void	init();
     void	destroy();
@@ -339,6 +480,7 @@ _ppit_destroy(_self)
     char_u*		title;
     int			has_title_items;
     int			has_shortcuts;
+    int			out_of_sync;  // if TRUE, the popup-items have to be updated
     NotificationList    title_obsrvrs;
 
     void	init();
@@ -346,6 +488,7 @@ _ppit_destroy(_self)
     void	read_options(dict_T* options);
     void	on_start();	    // called before the items are displayed for the first time
     void	clear_items();
+    void	sync_items();       // to be called when out_of_sync is TRUE
     int		get_item_count();
     PopupItem_T* get_item(int item);
 
@@ -387,8 +530,10 @@ _ppit_destroy(_self)
 
     // the provider may add a extra information to the result or change the existing information
     void	update_result(dict_T* status);
+
     // the provider handles the command and returns the next command
     char_u*	handle_command(PopupList* puls, char_u* command);
+    int		vim_cb_command(PopupList* puls, char_u* command, typval_T* rettv);
 
     // the provider can provide default keymaps for its commands
     void	default_keymap(PopupList* puls);
@@ -406,6 +551,7 @@ _iprov_init(_self)
     self->items = new_SegmentedGrowArrayP(sizeof(PopupItem_T), &_ppit_destroy);
     self->has_title_items = 0;
     self->has_shortcuts = 0;
+    self->out_of_sync = 0;
 }
 
     static void
@@ -457,6 +603,14 @@ _iprov_clear_items(_self)
     METHOD(ItemProvider, clear_items);
     /* clear deletes cached text from items */
     self->items->op->clear(self->items);
+}
+
+    static void
+_iprov_sync_items(_self)
+    void* _self;
+{
+    int i;
+    METHOD(ItemProvider, sync_items);
 }
 
     static int
@@ -662,24 +816,48 @@ _iprov_handle_command(_self, puls, command)
     char_u*	    command;
 {
     METHOD(ItemProvider, handle_command);
+    dictitem_T* option;
+    typval_T rettv;
+
+    vim_memset(&rettv, 0, sizeof(typval_T)); /* init_tv is not accessible */
+    self->op->vim_cb_command(self, puls, command, &rettv);
+
+    if (rettv.v_type == VAR_DICT)
+    {
+	option = dict_find(rettv.vval.v_dict, fld_next_cmd, -1L);
+	if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+	    puls->cmds_macro->op->add(puls->cmds_macro, option->di_tv.vval.v_string);
+    }
+    clear_tv(&rettv); /* TODO: extract possible next command and return it */
+
+    return NULL;
+}
+
+    static int
+_iprov_vim_cb_command(_self, puls, command, rettv)
+    void*	    _self;
+    PopupList_T*    puls;
+    char_u*	    command;
+    typval_T*	    rettv;
+{
+    METHOD(ItemProvider, vim_cb_command);
     dictitem_T* icmd;
 
     if (!self->commands || !command)
-	return NULL;
+	return 0;
 
     icmd = dict_find(self->commands, command, -1L);
     if (!icmd)
-	return NULL;
+	return 0;
 
     {
 	typval_T    argv[2 + 1]; /* command, status */
-	typval_T    rettv;
 	int	    argc = 0;
 	listitem_T  *item;
 	int	    dummy;
 	dict_T	    *selfdict = NULL;
-	char_u*	    fn = icmd->di_tv.vval.v_string;
-	dict_T*	    status = NULL;
+	char_u	    *fn = icmd->di_tv.vval.v_string;
+	dict_T	    *status = NULL;
 
 	status = dict_alloc();
 	++status->dv_refcount;
@@ -694,21 +872,14 @@ _iprov_handle_command(_self, puls, command)
 	++argc;
 
 	/* XXX-VIM: make call_func non-static in eval.c */
-	call_func(fn, (int)STRLEN(fn), &rettv, argc, argv,
+	call_func(fn, (int)STRLEN(fn), rettv, argc, argv,
 		curwin->w_cursor.lnum, curwin->w_cursor.lnum,
 		&dummy, TRUE, selfdict);
 
 	dict_unref(status); /* could also use clear_tv(&argv[1]) */
-
-	/* TODO: handle rettv of handle_command:
-	 *  next-command: the next command to execute 
-	 * in VimlistItemProvider:
-	 *  append-items: list of items to be appended to the current list
-	 *  replace-items: list of items that replace the current list
-	 *  */
     }
 
-    return NULL;
+    return 1;
 }
 
     static void
@@ -739,7 +910,8 @@ _iprov_sort_items(_self, cmp)
   class VimlistItemProvider(ItemProvider) [vlprov]
   {
     list_T*	vimlist;
-    int		_refcount; // how many times have we referenced the list
+    int		_refcount;	// how many times have we referenced the list
+    char	_list_lock;	// the state of list->v_lock when popuplist started
 
     // @var skip_leading is the number of characters to skip in the text
     // returned by get_display_text. The leading characters can be used to pass
@@ -753,11 +925,20 @@ _iprov_sort_items(_self, cmp)
     char_u* title_expr;
 
     void	init();
+    void	destroy();
+    PopupItem*  _cache_list_item(listitem_T* item);
+    void	sync_items();
     void	set_list(list_T* vimlist);
     void	read_options(dict_T* options);
     void	update_titles();
     char_u*	get_display_text(int item);
-    void	destroy();
+
+    // Handle command will call vim_cb_command. We use update_result to add
+    // the items to the status passed to vim_cb_command. We make sure that
+    // the list is locked. We restore the locked state when the process
+    // returns to handle_command.
+    void	update_result(dict_T* status);
+    char_u*	handle_command(PopupList* puls, char_u* command);
   };
 */
 
@@ -777,11 +958,13 @@ _vlprov_destroy(_self)
     void* _self;
 {
     METHOD(VimlistItemProvider, destroy);
-    if (self->vimlist && self->_refcount > 0)
-    {
-	list_unref(self->vimlist);
-	self->vimlist = NULL;
+    if (self->vimlist)
+    { 
+	self->vimlist->lv_lock = self->_list_lock; /* restore the initial lock */
+	if (self->_refcount > 0)
+	    list_unref(self->vimlist);
 	self->_refcount = 0;
+	self->vimlist = NULL;
     }
     vim_free(self->title_expr);
     END_DESTROY(VimlistItemProvider);
@@ -816,11 +999,13 @@ _vlprov_update_titles(_self)
     int i, item_count;
 
     self->has_title_items = 0;
+    if (! self->title_expr)
+	return;
     item_count = self->op->get_item_count(self);
     for(i = 0; i < item_count; i++)
     {
 	ppit = self->op->get_item(self, i);
-	if (ppit && self->title_expr)
+	if (ppit)
 	{
 	    // Check if it's a title. TODO: Use Vim regular expressions.
 	    if (STARTSWITH(ppit->text, self->title_expr))
@@ -832,11 +1017,75 @@ _vlprov_update_titles(_self)
     }
 }
 
+    static PopupItem_T*
+_vlprov__cache_list_item(_self, pitem)
+    void* _self;
+    listitem_T* pitem;
+{
+    METHOD(VimlistItemProvider, _cache_list_item);
+    char_u numbuf[NUMBUFLEN];
+    PopupItem_T* pit = NULL;
+    switch (pitem->li_tv.v_type)
+    {
+	default:
+	    pit = self->op->append_pchar_item(self, blankline, ITEM_SHARED);
+	    break;
+	/* We assume the list will remain unchanged, and we share the values if possible. */
+	case VAR_FUNC:
+	case VAR_STRING:
+	    if (pitem->li_tv.vval.v_string)
+		pit = self->op->append_pchar_item(self, pitem->li_tv.vval.v_string, ITEM_SHARED);
+	    else
+		pit = self->op->append_pchar_item(self, blankline, ITEM_SHARED);
+	    break;
+	case VAR_NUMBER:
+	    vim_snprintf((char *)numbuf, NUMBUFLEN, "%d", pitem->li_tv.vval.v_number);
+	    pit = self->op->append_pchar_item(self, vim_strsave(numbuf), !ITEM_SHARED);
+	    break;
+#ifdef FEAT_FLOAT
+	case VAR_FLOAT:
+	    vim_snprintf((char *)numbuf, NUMBUFLEN, "%g", pitem->li_tv.vval.v_float);
+	    pit = self->op->append_pchar_item(self, vim_strsave(numbuf), !ITEM_SHARED);
+	    break;
+#endif
+	case VAR_LIST:
+	    pit = self->op->append_pchar_item(self, str_type_list, ITEM_SHARED);
+	    break;
+	case VAR_DICT:
+	    pit = self->op->append_pchar_item(self, str_type_dict, ITEM_SHARED);
+	    break;
+    }
+
+    return pit;
+}
+
+/* The current popuplist items are removed and replaced with the items from vimlist.
+ */
+    static void
+_vlprov_sync_items(_self)
+    void* _self;
+{
+    METHOD(VimlistItemProvider, sync_items);
+    list_T* vimlist = self->vimlist;
+
+    /* clear the items but keep the allocated space */
+    self->items->op->clear_contents(self->items);
+    self->has_title_items = 0;
+
+    if (vimlist)
+    {
+	listitem_T *pitem;
+	for (pitem = vimlist->lv_first; pitem != NULL; pitem = pitem->li_next)
+	    self->op->_cache_list_item(self, pitem);
+    }
+
+    /* free the unused space */
+    self->items->op->truncate(self->items);
+}
+
 /*
  * VimlistItemProvider.set_list(vimlist)
  * Use the vimlist as the source for popuplist items.
- * The current popuplist items are removed and replaced with the items from vimlist.
- * Only the items of type VAR_STRING are used.
  */
     static void
 _vlprov_set_list(_self, vimlist)
@@ -845,36 +1094,144 @@ _vlprov_set_list(_self, vimlist)
 {
     METHOD(VimlistItemProvider, set_list);
 
-    if (self->vimlist != vimlist && self->vimlist && self->_refcount > 0)
-    {
-	list_unref(self->vimlist);
-	self->_refcount = 0;
-	self->vimlist = NULL;
-    }
-
-    self->op->clear_items(self);
-    self->has_title_items = 0;
-
-    self->vimlist = vimlist;
-    if (vimlist)
-    {
-	listitem_T *pitem;
-	++vimlist->lv_refcount;
-	self->_refcount = 1;
-
-	for (pitem = vimlist->lv_first; pitem != NULL; pitem = pitem->li_next)
+    if (self->vimlist != vimlist)
+    { 
+	if (self->vimlist)
 	{
-	    if (pitem->li_tv.v_type == VAR_STRING && pitem->li_tv.vval.v_string)
-	    {
-		/* We assume the list will remain unchanged, and we share the value. */
-		self->op->append_pchar_item(self, pitem->li_tv.vval.v_string, ITEM_SHARED);
-	    }
-	    else
-		self->op->append_pchar_item(self, blankline, ITEM_SHARED);
+	    self->vimlist->lv_lock = self->_list_lock;
+	    if (self->_refcount > 0)
+		list_unref(self->vimlist);
+	    self->_refcount = 0;
+	    self->_list_lock = 0;
+	    self->vimlist = NULL;
+	}
+	if (vimlist)
+	{
+	    self->vimlist = vimlist;
+	    ++vimlist->lv_refcount;
+	    self->_refcount = 1;
+	    self->_list_lock = vimlist->lv_lock;
 	}
     }
+
+    self->op->sync_items(self);
     if (self->title_expr)
 	self->op->update_titles(self);
+}
+
+    static void
+_vlprov_update_result(_self, status)
+    void*	_self;
+    dict_T*	status;
+{
+    METHOD(VimlistItemProvider, update_result);
+    dictitem_T* pdi;
+    if (status && self->vimlist)
+    {
+	dict_add_list(status, "items", self->vimlist);
+	self->vimlist->lv_lock |= VAR_LOCKED; /* should also lock the items; expensive */
+    }
+}
+
+    static char_u*
+_vlprov_handle_command(_self, puls, command)
+    void*	    _self;
+    PopupList_T*    puls;
+    char_u*	    command;
+{
+    METHOD(VimlistItemProvider, handle_command);
+    PopupItem_T* ppit;
+    dictitem_T* option;
+    listitem_T *pitem, *pcopy;
+    typval_T rettv;
+    int must_rebuild, i;
+
+    vim_memset(&rettv, 0, sizeof(typval_T)); /* XXX: init_tv is not accessible */
+    if ( ! self->op->vim_cb_command(self, puls, command, &rettv))
+	return NULL;
+
+    if (self->vimlist)
+	self->vimlist->lv_lock = self->_list_lock; /* should also unlock the items; expensive */
+
+    /* A verification if the list itemes are still valid, to prevent a crash:
+     *   check every ITEM_SHARED if it points to the same address as it did initially.
+     * If an invalid item is encountered, sync_items has to be called.
+     *
+     */
+    must_rebuild = 0;
+    i = 0;
+    if (self->op->get_item_count(self) != self->vimlist->lv_len)
+    {
+	LOG(("List size changed. The list must be rebuilt."));
+	must_rebuild = 1;
+    }
+    else
+    {
+	for (pitem = self->vimlist->lv_first; pitem != NULL; ++i, pitem = pitem->li_next)
+	{
+	    ppit = self->op->get_item(self, i);
+	    if (!ppit || ((ppit->flags & ITEM_SHARED) && ppit->text != pitem->li_tv.vval.v_string))
+	    {
+		LOG(("Item %d mismatched. The list must be rebuilt.", i));
+		must_rebuild = 1;
+		break;
+	    }
+	}
+    }
+
+    /*
+     *  TODO: replace-items: list of items that replace the current list
+     *    when we replace the items, must_rebuild will be 1, so the above
+     *    verification is not necessary.
+     *  TODO: if the list was initilally locked, we shouldn't modify it.
+     */
+
+    if (rettv.v_type == VAR_DICT)
+    {
+	option = dict_find(rettv.vval.v_dict, "additems", -1L);
+	if (option && option->di_tv.v_type == VAR_LIST)
+	{
+	    for (pitem = option->di_tv.vval.v_list->lv_first; pitem != NULL; pitem = pitem->li_next)
+	    {
+		if (list_append_tv(self->vimlist, &pitem->li_tv) != OK)
+		    continue;
+		if (must_rebuild)
+		    continue;
+		pcopy = self->vimlist->lv_last;
+		ppit = self->op->_cache_list_item(self, pcopy);
+		if (ppit)
+		{
+		    /* XXX: synchronize with code in update_titles() */
+		    if (self->title_expr && STARTSWITH(ppit->text, self->title_expr))
+		    {
+			ppit->flags |= ITEM_TITLE;
+			self->has_title_items = 1;
+		    }
+		}
+	    }
+	}
+
+	option = dict_find(rettv.vval.v_dict, fld_next_cmd, -1L);
+	if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+	    puls->cmds_macro->op->add(puls->cmds_macro, option->di_tv.vval.v_string);
+    }
+    clear_tv(&rettv); /* TODO: extract possible next command and return it */
+
+    if (must_rebuild)
+    {
+	/*
+	 * MAYBE: must_rebuild could be a VimlistItemProvider member; we could
+	 * apply sync_items right before we would access an item for the first
+	 * time after must_rebuild was set.
+	 */
+	self->op->sync_items(self);
+	if (self->title_expr)
+	    self->op->update_titles(self);
+    }
+
+    /* TODO: apply filter to new items; this should be done by notifying the observers */
+
+    return NULL;
 }
 
     static char_u*
@@ -902,7 +1259,7 @@ _vlprov_get_display_text(_self, item)
 #include "puls_pb.c"
 #endif
 
-#ifdef FEAT_POPUPLIST_MENUS
+#if defined(FEAT_POPUPLIST_MENUS)
 #include "puls_pm.c"
 #endif
 
@@ -1689,7 +2046,7 @@ _txmcmdt_match(_self, haystack)
     else
     {
 	hays_positions[1] = first_pos;
-	mb_ptr_adv(hays_positions[1]);
+	ADVANCE_CHAR_P(hays_positions[1]);
 	stack_pos = 1;
     }
 
@@ -1703,7 +2060,7 @@ _txmcmdt_match(_self, haystack)
 	{
 	    --stack_pos;
 	    if (stack_pos >= 0)
-		mb_ptr_adv(hays_positions[stack_pos]);
+		ADVANCE_CHAR_P(hays_positions[stack_pos]);
 	    continue;
 	}
 	hays_positions[stack_pos] = p;
@@ -1711,7 +2068,7 @@ _txmcmdt_match(_self, haystack)
 	{
 	    ++stack_pos;
 	    hays_positions[stack_pos] = hays_positions[stack_pos-1];
-	    mb_ptr_adv(hays_positions[stack_pos]);
+	    ADVANCE_CHAR_P(hays_positions[stack_pos]);
 	    continue;
 	}
 	else
@@ -1728,7 +2085,7 @@ _txmcmdt_match(_self, haystack)
 	    if (self->last_retry_offset < 0)
 	    {
 		/* always retry */
-		mb_ptr_adv(hays_positions[stack_pos]);
+		ADVANCE_CHAR_P(hays_positions[stack_pos]);
 	    }
 	    else
 	    {
@@ -1736,7 +2093,7 @@ _txmcmdt_match(_self, haystack)
 		while (stack_pos >= 0 && hays_positions[stack_pos] >= last_retry_pos)
 		    --stack_pos;
 		if (stack_pos >= 0)
-		    mb_ptr_adv(hays_positions[stack_pos]);
+		    ADVANCE_CHAR_P(hays_positions[stack_pos]);
 	    }
 	}
     }
@@ -2402,20 +2759,28 @@ _bxal_align(_self, box, border)
 
 /* [ooc]
  *
-  // enum FindKeyResult { KM_NOTFOUND, KM_PREFIX, KM_MATCH };
-  const KM_NOTFOUND = 0;
-  const KM_PREFIX   = 1;
-  const KM_MATCH    = 2;
+  const KM_NOTFOUND  = 0;
+  const KM_PREFIX    = 1;
+  const KM_MATCH     = 2;
+  const KM_AMBIGUOUS = (KM_PREFIX | KM_MATCH);
+  // TODO: SimpleKeymap could be implemented as a tree where every level
+  // consumes a byte of the input sequence. Maybe it would be easier to
+  // find ambiguities this way.
+  //    struct _kmap_ {
+  //       char_u  piece;
+  //       char_u* command;
+  //       struct _kmap_ children[];
+  //    }
+  // TODO: (maybe) special commands
+  //    @'seq   - stuff the sequence seq into the input buffer (similar to remap)
+  //    @#cmd   - accept an operator and pass it to the command cmd
+  //    @@cmd   - literal '@'; the command name is '@seq'.
   class SimpleKeymap [skmap]
   {
      char_u*	name;
      dict_T*	key2cmd;    // maps a raw Vim sequence to a command name
      int	has_insert; // kmap is used for text insertion
      char_u	mode_char;  // displayed in the border when input is active; only used with has_insert
-     // Vim is able to produce a nice name from a given raw sequence ...
-     //    - eval_vars() expands <cword> etc. but not keys
-     //    - get_string_tv() (eval.c) -> trans_special() (misc2.c) -> find_special_key() translates <keys>
-     //    - msg_outtrans_special() (message.c) -> str2special() translates raw bytes to <keys>
 
      void   init();
      void   destroy();
@@ -2553,27 +2918,36 @@ _skmap_find_key(_self, sequence)
     hashitem_T	*hi;
     dictitem_T* seqmap;
     DictIterator_T itkeys;
-    int seq_len, is_prefix, todo;
+    int seq_len, match, todo;
 
+    match = 0; /* KM_NOTFOUND */
     seqmap = dict_find(self->key2cmd, sequence, -1L);
     if (seqmap)
-	return KM_MATCH;
+    {
+	match |= KM_MATCH;
+#ifdef DEBUG
+	LOG(("   '%s' --> '%s'", sequence, seqmap->di_tv.vval.v_string));
+#endif
+    }
 
     /* Test if sequence is a prefix of any of the items in the current modemap */
-    is_prefix = 0;
     seq_len = STRLEN(sequence);
 
     init_DictIterator(&itkeys);
     for(seqmap = itkeys.op->begin(&itkeys, self->key2cmd); seqmap != NULL; seqmap = itkeys.op->next(&itkeys))
     {
-	if (EQUALSN(seqmap->di_key, sequence, seq_len))
+	if (EQUALSN(seqmap->di_key, sequence, seq_len) && *(seqmap->di_key + seq_len) != NUL)
 	{
-	    is_prefix = 1;
+#ifdef DEBUG
+	    if (match)
+		LOG(("   '%s' --> '%s' AMBIGUOUS", seqmap->di_key, seqmap->di_tv.vval.v_string));
+#endif
+	    match |= KM_PREFIX;
 	    break;
 	}
     }
 
-    return is_prefix ? KM_PREFIX : KM_NOTFOUND;
+    return match;
 }
 
     static void
@@ -2854,7 +3228,7 @@ _wbor_draw_bottom(_self)
     col = self->inner_box->left;
     right = _box_right(self->inner_box);
     attr = self->border_attr;
-    LOG(("draw_bottom: row=%d col=%d", row, col));
+    /*LOG(("draw_bottom: row=%d col=%d", row, col));*/
     if (self->active[WINBORDER_LEFT])
     {
 	screen_putchar(self->border_chars[WINBORDER_BOTTOM*2+1], row, col-1, attr);
@@ -3016,6 +3390,8 @@ _wbor_draw_item_right(_self, line, current)
     SimpleKeymap*   km_search;
     SimpleKeymap*   km_shortcut;
     SimpleKeymap*   modemap;	// current mode map
+    CommandQueue*   cmds_keyboard;
+    CommandQueue*   cmds_macro;
     BoxAligner*	    aligner;	// positions the list box on the screen
     WindowBorder*   border;
     LineEdit*	    line_edit;
@@ -3087,6 +3463,8 @@ _puls_init(_self)
     self->km_shortcut = new_SimpleKeymap();
     self->km_shortcut->op->set_name(self->km_shortcut, "shortcut");
     self->modemap = self->km_normal;
+    self->cmds_keyboard = new_CommandQueue();
+    self->cmds_macro = new_CommandQueue();
     init_Box(&self->position);
     self->border = new_WindowBorder();
     self->border->inner_box = &self->position;
@@ -3103,7 +3481,6 @@ _puls_init(_self)
     self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
     self->hl_filter = new_TextMatchHighlighter();
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
-    /* TODO: hl_menu should be created only in menu mode */
     self->hl_menu = new_ShortcutHighlighter();
     self->hl_menu->shortcut_attr = _puls_hl_attrs[PULSATTR_SHORTCUT].attr;
 }
@@ -3121,6 +3498,8 @@ _puls_destroy(_self)
     CLASS_DELETE(self->km_filter);
     CLASS_DELETE(self->km_search);
     CLASS_DELETE(self->km_shortcut);
+    CLASS_DELETE(self->cmds_keyboard);
+    CLASS_DELETE(self->cmds_macro);
     CLASS_DELETE(self->border);
     CLASS_DELETE(self->line_edit);
     CLASS_DELETE(self->user_matcher);
@@ -3225,6 +3604,10 @@ _puls_read_options(_self, options)
 	if (self->current < 0)
 	    self->current = 0;
     }
+
+    option = dict_find(options, fld_next_cmd, -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+	self->cmds_macro->op->add(self->cmds_macro, option->di_tv.vval.v_string);
 }
 
     static void
@@ -3250,8 +3633,10 @@ _puls_default_keymap(_self)
     modemap->op->set_key(modemap, "q", "quit");
     modemap->op->set_key(modemap, "j", "next-item");
     modemap->op->set_key(modemap, "k", "prev-item");
-    modemap->op->set_key(modemap, "n", "next-page"); /* XXX: <space> */
-    modemap->op->set_key(modemap, "p", "prev-page"); /* XXX: <b> */
+    modemap->op->set_key(modemap, "n", "next-page"); /* XXX:? <space> */
+    modemap->op->set_key(modemap, "p", "prev-page"); /* XXX:? <b> */
+    modemap->op->set_key(modemap, "gg", "go-home");
+    modemap->op->set_key(modemap, "G", "go-end");
     modemap->op->set_key(modemap, "h", "shift-left");
     modemap->op->set_key(modemap, "l", "shift-right");
     modemap->op->set_key(modemap, "m", "toggle-marked");
@@ -3261,6 +3646,7 @@ _puls_default_keymap(_self)
     modemap->op->set_key(modemap, "&", "modeswitch:shortcut");
     modemap->op->set_vim_key(modemap, "<c-n>", "isearch-next");
     modemap->op->set_vim_key(modemap, "<c-p>", "isearch-prev");
+    modemap->op->set_vim_key(modemap, "<c-l>", "auto-resize");
     modemap->op->set_vim_key(modemap, "<c-t>", "filter-toggle-titles");
     modemap->op->set_vim_key(modemap, "<tab>", "next-item");
     modemap->op->set_vim_key(modemap, "<s-tab>", "prev-item");
@@ -3268,11 +3654,25 @@ _puls_default_keymap(_self)
     modemap->op->set_vim_key(modemap, "<up>", "prev-item");
     modemap->op->set_vim_key(modemap, "<pagedown>", "next-page");
     modemap->op->set_vim_key(modemap, "<pageup>", "prev-page");
+    modemap->op->set_vim_key(modemap, "<home>", "go-home");
+    modemap->op->set_vim_key(modemap, "<end>", "go-end");
     modemap->op->set_vim_key(modemap, "<left>", "shift-left");
     modemap->op->set_vim_key(modemap, "<right>", "shift-right");
     modemap->op->set_vim_key(modemap, "<cr>", "accept");
-    modemap->op->set_vim_key(modemap, "<esc>", "quit");
     modemap->op->set_vim_key(modemap, "<backspace>", "select-parent");
+    modemap->op->set_vim_key(modemap, "<esc>", "quit");
+#ifdef DEBUG
+    /* This sequence is ambiguous in a terminal: '<a-d>' -> '<esc>d'.
+     * :map <a-d> ... creates lhs='ä' instead of lhs='<esc>d';
+     * a terminal (gnome, konsole) sends '<esc>d'; gui sends 'ä'.
+     * see |map-alt-keys|.
+     * */
+    modemap->op->set_vim_key(modemap, "<a-d>", "next-item");
+    modemap->op->set_vim_key(modemap, "<esc>d", "next-item");
+
+    modemap->op->set_vim_key(modemap, "aa", "next-item");
+    modemap->op->set_vim_key(modemap, "aab", "prev-item");
+#endif
 
     for (i = 0; i < 2; i++)
     {
@@ -3288,7 +3688,8 @@ _puls_default_keymap(_self)
 	}
 	modemap->op->clear_all_keys(modemap);
 	modemap->op->set_vim_key(modemap, "<cr>", "accept");
-	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal"); /*TODO:"modeswitch:normal|next-item"*/
+	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal|next-item");
+	modemap->op->set_vim_key(modemap, "<s-tab>", "modeswitch:normal|prev-item");
 	modemap->op->set_vim_key(modemap, "<esc>", "modeswitch:normal");
 	modemap->op->set_vim_key(modemap, "<backspace>", "input-bs");
 	modemap->op->set_vim_key(modemap, "<c-u>", "input-clear");
@@ -3360,15 +3761,30 @@ _puls_prepare_result(_self, result)
     dict_T* result;
 {
     METHOD(PopupList, prepare_result);
-    list_T* marked;
-    int idx;
+    list_T*	marked;
+    typval_T	tv;
+    int		idx, item_count;
     if (! result)
 	return;
     idx = self->filter->op->get_model_index(self->filter, self->current);
+    item_count = self->model->op->get_item_count(self->model);
     dict_add_nr_str(result, "current", idx, NULL);
     marked = list_alloc();
-    /* TODO: fill the marked list */
+
+    tv.v_type = VAR_NUMBER;
+    tv.v_lock = 0;
+
+    /* fill the list of marked items */
     dict_add_list(result, "marked", marked);
+    for (idx = 0; idx < item_count; ++idx)
+    {
+	if (self->model->op->has_flag(self->model, idx, ITEM_MARKED))
+	{
+	    tv.vval.v_number = idx;
+	    list_append_tv(marked, &tv);
+	}
+    }
+
     /* TODO: fill the path for hierarchical list */
 
     if (self->model)
@@ -3709,6 +4125,8 @@ _puls_set_current(_self, index)
 	index = item_count - 1;
     self->current = index;
     self->need_redraw |= PULS_REDRAW_CURRENT;
+
+    /* TODO: optional scrolloff for the puls */
     if (self->current - self->first >= self->position.height)
     {
 	self->first = self->current - self->position.height + 1;
@@ -3718,7 +4136,7 @@ _puls_set_current(_self, index)
     }
     else if (self->current < self->first)
     {
-	self->first = self->current - 3; /* TODO: optional scrolloff for the puls */
+	self->first = self->current - 3;
 	if (self->first < 0)
 	    self->first = 0;
 	self->need_redraw |= PULS_REDRAW_ALL;
@@ -3930,6 +4348,26 @@ _puls_do_command(_self, command)
 	}
 	return 1;
     }
+    else if (EQUALS(command, "go-home")) {
+	if (self->current != 0)
+	{
+	    self->current = 0;
+	    if (self->current < self->first)
+		self->first = 0;
+	    self->need_redraw |= PULS_REDRAW_ALL;
+	}
+	return 1;
+    }
+    else if (EQUALS(command, "go-end")) { /* works as G and zb */
+	self->current = item_count - 1;
+	if (self->current < 0)
+	    self->current = 0;
+	self->first = self->current - self->position.height + 1;
+	if (self->first < 0)
+	    self->first = 0;
+	self->need_redraw |= PULS_REDRAW_ALL;
+	return 1;
+    }
     else if (EQUALS(command, "shift-left")) {
 	if (self->leftcolumn > 0)
 	{
@@ -3950,6 +4388,11 @@ _puls_do_command(_self, command)
 	int marked = !self->model->op->has_flag(self->model, idx_model_current, ITEM_MARKED);
 	self->model->op->set_marked(self->model, idx_model_current, marked);
 	self->need_redraw |= PULS_REDRAW_CURRENT;
+	return 1;
+    }
+    else if (EQUALS(command, "auto-resize")) {
+	self->op->reposition(self);
+	self->need_redraw |= PULS_REDRAW_ALL;
 	return 1;
     }
     else if (EQUALS(command, "input-bs")) {
@@ -4103,6 +4546,18 @@ _getkey()
     return key;
 }
 
+    static int
+_nextkey()
+{
+    int avail;
+    ++no_mapping;
+    ++allow_keys;
+    avail = vpeekc();
+    --no_mapping;
+    --allow_keys;
+    return avail;
+}
+
     static void
 _forced_redraw()
 {
@@ -4177,9 +4632,6 @@ _puls_switch_mode(_self, modename)
     }
 }
 
-static char_u cmd_quit[] = "quit";
-static char_u cmd_accept[] = "accept";
-
     static int
 _puls_process_command(_self, command)
     void* _self;
@@ -4247,7 +4699,7 @@ _puls_process_command(_self, command)
     else if (STARTSWITH(command, "modeswitch:"))
     {
 	LOG(("%s", command));
-	command += 11; /* skip past : */
+	command += 11; /* skip past ':' */
 	self->op->switch_mode(self, command);
 	self->need_redraw |= PULS_REDRAW_FRAME;
 	return PULS_LOOP_CONTINUE;
@@ -4275,6 +4727,7 @@ _puls_test_loop(pplist, rettv)
     SimpleKeymap_T *modemap;
     ItemProvider_T *pmodel;
     WindowBorder_T *pborder;
+    ItemFilter_T   *pfilter;
 
 #define MAX_KEY_SIZE	6*3+1		/* XXX: What is the longest sequence key_to_str can produce? */
 #define MAX_SEQ_LEN	8*MAX_KEY_SIZE
@@ -4282,13 +4735,27 @@ _puls_test_loop(pplist, rettv)
     char_u *ps;
     dictitem_T* seqmap;
     char_u* command;
-    int rv, seq_len, key, found, prev_found;
+    int rv, seq_len, key, found, prev_found, hh, de;
+    int avail, sleep_count;
+    int ambig_timeout;
+    CommandQueue_T* curcmds;
 
     pborder = pplist->border;
     pmodel = pplist->model;
+    pfilter = pplist->filter;
 
     /* make sure the current item is displayed */
     pplist->op->set_current(pplist, pplist->current);
+    hh = pplist->position.height / 2;
+    if (pplist->current > hh)
+    {
+	de = pfilter->op->get_item_count(pfilter) - pplist->current;
+	if (de < hh) 
+	    hh = pplist->position.height - de;
+	pplist->first = pplist->current - hh;
+	if (pplist->first < 0)
+	    pplist->first = 0;
+    }
 
     ps = sequence;
     *ps = NUL;
@@ -4299,12 +4766,16 @@ _puls_test_loop(pplist, rettv)
 	modemap = pplist->modemap;
 	if (pborder)
 	{
-	    int nf = pplist->filter->op->get_item_count(pplist->filter);
+	    int nf = pfilter->op->get_item_count(pfilter);
 	    int nt = pmodel->op->get_item_count(pmodel);
+	    char* pending;
+	    pending = (found & KM_PREFIX) ? sequence : NULL;
 	    if (nf == nt)
-		vim_snprintf(buf, 32, "%d/%d", pplist->current + 1, nt);
+		vim_snprintf(buf, 32, "%d/%d%s%s", pplist->current + 1, nt,
+			pending ? " " : "", pending ? pending : "");
 	    else
-		vim_snprintf(buf, 32, "%d/%d(%d)", pplist->current + 1, nf, nt);
+		vim_snprintf(buf, 32, "%d/%d(%d)%s%s", pplist->current + 1, nf, nt,
+			pending ? " " : "", pending ? pending : "");
 	    pborder->op->set_info(pborder, buf);
 	    if (pplist->need_redraw)
 	    {
@@ -4312,7 +4783,7 @@ _puls_test_loop(pplist, rettv)
 		{
 		    TextMatcher_T* ptm = NULL;
 		    if (modemap == pplist->km_filter)
-			ptm = pplist->filter->matcher;
+			ptm = pfilter->matcher;
 		    else if (modemap == pplist->km_search)
 			ptm = pplist->isearch->matcher;
 		    if (ptm)
@@ -4348,68 +4819,158 @@ _puls_test_loop(pplist, rettv)
 	}
 	pplist->op->move_cursor(pplist);
 
-	key = _getkey();
-	ps = key_to_str(key, ps);
-	seq_len = ps - sequence;
-	if (seq_len < 1)
-	    continue;
-
-	/* TODO: (maybe) mb_len(sequence) == 1 and mb_isalnum(sequence) */
-	if (isalnum(*sequence) && pmodel->has_shortcuts && modemap == pplist->km_shortcut
-		&& !pplist->filter->op->is_active(pplist->filter))
+	/* Command processing:
+	 *    - queued kbd commands are processed immediately,
+	 *    - queued 'macro' commands are processed when there is no input,
+	 *    - keys are read when there are no commands in the keyboard command queue.
+	 */
+	avail = (_nextkey() != NUL);
+	if (pplist->cmds_keyboard->op->head(pplist->cmds_keyboard))
 	{
-	    int isshrt, next, unique;
-	    isshrt = pmodel->op->find_shortcut(pmodel, sequence, pplist->current+1, &next, &unique);
-	    if (isshrt)
+	    if (got_int)
+		break;
+	}
+	else if (pplist->cmds_macro->op->head(pplist->cmds_macro) && !avail)
+	{/* pass */}
+	else
+	{
+	    if (found == KM_AMBIGUOUS)
 	    {
-		pplist->op->set_current(pplist, next);
-		if (unique)
+		if (got_int)
+		    break;
+
+		/* wait for next character or a timeout */
+		avail = (_nextkey() != NUL);
+		if (!avail && sleep_count < ambig_timeout)
 		{
-		    command = cmd_accept;
-		    rv = pplist->op->process_command(pplist, command);
-		    if (rv == PULS_LOOP_BREAK)
-			break;
+		    do_sleep(20);
+		    sleep_count += 20;
+		    continue;
+		}
+		if (!avail)
+		{
+		    LOG(("found = KM_AMBIGUOUS, end of sleep %d", sleep_count));
+		    prev_found = KM_PREFIX;
+		    found = KM_MATCH;
+		    LOG(("   found -> KM_MATCH, '%s'", sequence));
+		}
+		else
+		{
+		    LOG(("found = KM_AMBIGUOUS, GOT SOMETHING! slept: %d, key: %d", sleep_count, avail));
+		    key = _getkey();
+		    ps = key_to_str(key, ps);
+		    prev_found = KM_PREFIX;
+		    found = KM_NOTFOUND;
+		    /* TODO: if the sequence fails at this time, we should push back key */
+		    LOG(("   found -> KM_NOTFOUND, '%s', will check", sequence));
 		}
 	    }
-	    ps = sequence;
-	    found = KM_NOTFOUND;
-	    continue;
-	}
-
-	prev_found = found;
-	found = modemap->op->find_key(modemap, sequence);
-	if (found == KM_PREFIX)
-	{
-	    if (seq_len > MAX_SEQ_LEN - MAX_KEY_SIZE)
+	    else
 	    {
+		key = _getkey();
+		if (got_int)
+		    break;
+		ps = key_to_str(key, ps);
+	    }
+
+	    seq_len = ps - sequence;
+	    if (seq_len < 1)
+		continue;
+
+	    if (pmodel->has_shortcuts && modemap == pplist->km_shortcut
+		    && !pfilter->op->is_active(pfilter)
+		    && vim_iswordp(sequence))
+	    {
+		int isshrt, next, unique;
+		char_u* p = sequence;
+		ADVANCE_CHAR_P(p);
+		if (*p == NUL) {
+		    LOG(("   handle shortcut, '%s'", sequence));
+		    isshrt = pmodel->op->find_shortcut(pmodel, sequence, pplist->current+1, &next, &unique);
+		    if (isshrt)
+		    {
+			pplist->op->set_current(pplist, next);
+			if (unique)
+			    pplist->cmds_keyboard->op->add(pplist->cmds_keyboard, cmd_accept);
+		    }
+		    ps = sequence;
+		    found = KM_NOTFOUND;
+		    continue;
+		}
+	    }
+
+	    prev_found = found;
+	    if (found != KM_MATCH)
+	    {
+		LOG(("checking '%s' '%s'", modemap->name, sequence));
+		found = modemap->op->find_key(modemap, sequence);
+		if (found == KM_AMBIGUOUS)
+		{
+		    LOG(("found -> KM_AMBIGUOUS, sleep_count=0"));
+		    sleep_count = 0;
+		    /* use timeoutlen or ttimeoutlen */
+		    ambig_timeout = (p_ttm < 0 ? p_tm : p_ttm);
+		    /* XXX: In console a timeout for <esc> is applied twice.
+		     * We should detect that vim already timed out on <esc>.
+		    if (*sequence == 0x1e && *(sequence+1) == NUL)
+		    {
+			ambig_timeout = 0;
+		    }
+		    */
+		    continue;
+		}
+	    }
+
+	    if (found == KM_PREFIX)
+	    {
+		LOG(("   handle KM_PREFIX, '%s'", sequence));
+		if (seq_len > MAX_SEQ_LEN - MAX_KEY_SIZE)
+		{
+		    ps = sequence;
+		    *ps = NUL;
+		    found = KM_NOTFOUND;
+		}
+		continue;
+	    }
+	    if (found == KM_NOTFOUND)
+	    {
+		LOG(("   handle KM_NOTFOUND, '%s'", sequence));
+		/* TODO: has_insert is just a quick solution; there may be other insertion points
+		 * in the future, not just line_edit */
+		if (modemap->has_insert && prev_found != KM_PREFIX && !IS_SPECIAL(key))
+		{
+		    if (pplist->line_edit->op->add_text(pplist->line_edit, sequence))
+			pplist->line_edit->change_obsrvrs.op->notify(&pplist->line_edit->change_obsrvrs, NULL);
+		}
 		ps = sequence;
 		*ps = NUL;
-		found = KM_NOTFOUND;
+		continue;
 	    }
-	    continue;
-	}
-	if (found == KM_NOTFOUND)
-	{
-	    /* TODO: has_insert is just a quick solution; there may be other insertion points
-	     * in the future, not just line_edit */
-	    if (modemap->has_insert && prev_found != KM_PREFIX && !IS_SPECIAL(key))
-	    {
-		if (pplist->line_edit->op->add_text(pplist->line_edit, sequence))
-		    pplist->line_edit->change_obsrvrs.op->notify(&pplist->line_edit->change_obsrvrs, NULL);
-	    }
+	    /* KM_MATCH */
+	    LOG(("   handle KM_MATCH, '%s'", sequence));
+
+	    command = modemap->op->get_command(modemap, sequence, 0 /* don't create a copy */ );
+	    if (command)
+		pplist->cmds_keyboard->op->add(pplist->cmds_keyboard, command);
+
 	    ps = sequence;
 	    *ps = NUL;
-	    continue;
+	    found = KM_NOTFOUND;
 	}
 
-	command = modemap->op->get_command(modemap, sequence, 0 /* don't create a copy */ );
-	ps = sequence;
-	*ps = NUL;
-	if (command) /* command is NULL only if there is a bug somewhere */
+	if (pplist->cmds_keyboard->op->head(pplist->cmds_keyboard))
+	    curcmds = pplist->cmds_keyboard;
+	else if (pplist->cmds_macro->op->head(pplist->cmds_macro))
+	    curcmds = pplist->cmds_macro;
+	else
+	    curcmds = NULL;
+	if (curcmds)
 	{
-	    rv = pplist->op->process_command(pplist, command);
+	    rv = pplist->op->process_command(pplist, curcmds->op->head(curcmds));
 	    if (rv == PULS_LOOP_BREAK)
 		break;
+	    curcmds->op->pop(curcmds);
+	    curcmds = NULL;
 	}
     }
 
@@ -4427,18 +4988,30 @@ _puls_test_loop(pplist, rettv)
 	rettv->v_type = VAR_DICT;
 	++d->dv_refcount;
 
+	if (curcmds)
+	{
+	    command = curcmds->op->head(curcmds);
+	    LOG(("Terminated by command '%s'", command));
+	}
+	else
+	{
+	    command = cmd_quit;
+	    LOG(("Terminated by 'sigint'"));
+	}
+
 	dict_add_nr_str(d, "status", 0, command);
 	if (pplist->modemap)
 	    dict_add_nr_str(d, "mode", 0, pplist->modemap->name);
 
 	if (EQUALS(command, "accept") || STARTSWITH(command, "accept:"))
 	    pplist->op->prepare_result(pplist, d);
+	else
+	    dict_add_nr_str(d, "current", pplist->current, NULL);
     }
 
     return rv;
 }
 
-#define INCLUDE_TESTS
 #if defined(INCLUDE_TESTS)
 #include "puls_test.c"
 #endif
@@ -4561,14 +5134,15 @@ puls_test(argvars, rettv)
 	}
 #endif
 #if defined(INCLUDE_TESTS)
-	static char str_pulslog[] = "pulslog";
-	if (EQUALS(special_items, "test-command-t"))
+	if (EQUALS(special_items, str_pulstest))
 	{
+	    _test_list_helper();
 	    _test_command_t();
 	    special_items = str_pulslog;
 	}
 #endif
-	if (EQUALS(special_items, "pulslog"))
+#if defined(INCLUDE_TESTS) || defined(DEBUG)
+	if (EQUALS(special_items, str_pulslog))
 	{
 	    LOG(("PULS LOG"));
 	    if (PULSLOG.lv_refcount < 1)
@@ -4577,6 +5151,7 @@ puls_test(argvars, rettv)
 	    vlmodel->op->set_list(vlmodel, &PULSLOG);
 	    model = (ItemProvider_T*) vlmodel;
 	}
+#endif
 
 	if (! model)
 	{

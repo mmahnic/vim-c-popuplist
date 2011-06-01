@@ -163,7 +163,7 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     pwidth = 0;		    /* total width including current character */
     col = self->min_col;    /* write position */
 
-    for ( ; p != NULL; mb_ptr_adv(p))
+    for ( ; p != NULL; ADVANCE_CHAR_P(p))
     {
 	if (*p == TAB)
 	    w = self->op->get_tab_size_at(self, pwidth);
@@ -597,7 +597,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 
 	    if (w == 0)
 	    {
-		mb_ptr_adv(p);
+		ADVANCE_CHAR_P(p);
 		continue;
 	    }
 
@@ -607,7 +607,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 		if (*p == NUL) break;
 		else
 		{
-		   mb_ptr_adv(p);
+		   ADVANCE_CHAR_P(p);
 		   continue;
 		}
 	    }
@@ -620,7 +620,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 		    /* character partly visible -- output spaces */
 		    memset(s, ' ', dfirst);
 		    s += dfirst;
-		    mb_ptr_adv(p);
+		    ADVANCE_CHAR_P(p);
 		    continue;
 		}
 	    }
@@ -630,7 +630,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 	    {
 		memset(s, ' ', w); /* XXX: we could implement sth. like 'set list' */
 		s += w;
-		mb_ptr_adv(p);
+		ADVANCE_CHAR_P(p);
 	    }
 	    else
 		MB_COPY_CHAR(p, s);

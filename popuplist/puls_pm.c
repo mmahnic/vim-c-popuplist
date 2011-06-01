@@ -79,7 +79,7 @@ _mnupr_find_menu(_self, menu_path)
 	pm = root_menu;
     else
     {
-	pm = gui_find_menu(menu_path); /* XXX: this may create an error !!! */
+	pm = gui_find_menu(menu_path); /* XXX: this may create a Vim error !!! */
 	if (pm)
 	    pm = pm->children;
 	else
@@ -233,19 +233,16 @@ _mnupr_select_item(_self, item)
     else
     {
 	int mode = self->mode;
-	/* TODO: More has to be done for menus in visual mode.
-	 * By default the menu is shown for every selected line.
-	 * Unfortunately built-in functions don't accept a range. */
 
-	/* This works both in console and in gui */
 	if (mode != MENU_INDEX_INVALID && pm->strings[mode] != NULL)
-	    exec_normal_cmd(pm->strings[mode], pm->noremap[mode], pm->silent[mode]);
+	{
+	    /* If called as 'vmenu', restore the Visual mode (noremap, silent) */
+	    if (mode == MENU_INDEX_VISUAL)
+		exec_normal_cmd("gv", REMAP_NONE, 1);
 
-	/* ins_typebuf doesn't work from puls */
-	/*if (mode != MENU_INDEX_INVALID && pm->strings[mode] != NULL)*/
-	/*    ins_typebuf(pm->strings[mode], pm->noremap[mode], 0, TRUE, pm->silent[mode]);*/
-	/* gui_menu_cb only works in GUI */
-	/*gui_menu_cb(pm);*/
+	    /* This works both in console and in gui */
+	    exec_normal_cmd(pm->strings[mode], pm->noremap[mode], pm->silent[mode]);
+	}
 
 	return -1;
     }
