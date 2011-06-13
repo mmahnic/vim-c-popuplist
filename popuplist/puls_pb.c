@@ -77,7 +77,7 @@ _bprov_get_title(_self)
     void* _self;
 {
     METHOD(ItemProvider, get_title);
-    static char title[] = "Buffers";
+    static char_u title[] = "Buffers";
     return title;
 }
 
@@ -89,20 +89,20 @@ _bprov_read_options(_self, options)
     METHOD(BufferItemProvider, read_options);
     dictitem_T* option;
 
-    option = dict_find(options, "unlisted", -1L);
+    option = dict_find(options, VSTR("unlisted"), -1L);
     if (option && option->di_tv.v_type == VAR_NUMBER)
     {
 	self->show_unlisted = option->di_tv.vval.v_number ? 1 : 0;
     }
 
-    option = dict_find(options, "sort", -1L);
+    option = dict_find(options, VSTR("sort"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
 	self->sorted_by = *option->di_tv.vval.v_string;
 	LOG(("BufferItemProvider sort option %c", self->sorted_by));
     }
 
-    option = dict_find(options, "mru-list", -1L);
+    option = dict_find(options, VSTR("mru-list"), -1L);
     if (option && option->di_tv.v_type == VAR_LIST)
     {
 	self->mru_list = option->di_tv.vval.v_list;
@@ -129,7 +129,7 @@ _bprov_list_buffers(_self)
     int		i;
     char_u	*fname;
     char_u	*dirname;
-    char	curdir[] = ".";
+    char_u	curdir[] = ".";
     PopupItem_T* pit;
 
     self->op->clear_items(self);
@@ -381,11 +381,11 @@ _bprov_update_result(_self, status)
 
     /* convert index to bufnr */
     /* XXX: maybe it would be better to create current-buf and marked-buf */
-    pdi = dict_find(status, "current", -1L);
+    pdi = dict_find(status, VSTR("current"), -1L);
     if (pdi && pdi->di_tv.v_type == VAR_NUMBER)
 	pdi->di_tv.vval.v_number = self->op->_index_to_bufnr(self, (int)pdi->di_tv.vval.v_number);
 
-    pdi = dict_find(status, "marked", -1L);
+    pdi = dict_find(status, VSTR("marked"), -1L);
     if (pdi && pdi->di_tv.v_type == VAR_LIST && pdi->di_tv.vval.v_list)
     {
 	list_T* l = pdi->di_tv.vval.v_list;
@@ -433,12 +433,12 @@ _bprov_handle_command(_self, puls, command)
     }
     else if (EQUALS(command, "buf-delete") || EQUALS(command, "buf-wipeout") || EQUALS(command, "buf-unload"))
     {
-	char cbuf[32]; /* XXX: remove from stack */
+	char_u cbuf[32]; /* XXX: remove from stack */
 	PopupItem_T* pit = self->op->get_item(self, puls->current);
 	if (pit)
 	{
 	    buf_T* bi = (buf_T*) pit->data;
-	    sprintf(cbuf, "b%s %d", command+4, bi->b_fnum);
+	    sprintf((char*)cbuf, "b%s %d", command+4, bi->b_fnum);
 	    do_cmdline_cmd(cbuf);
 	}
 	
@@ -470,15 +470,15 @@ _bprov_default_keymap(_self, puls)
     SimpleKeymap_T* modemap;
 
     modemap = puls->km_normal;
-    modemap->op->set_key(modemap, "xd", "buf-delete");
-    modemap->op->set_key(modemap, "xu", "buf-unload");
-    modemap->op->set_key(modemap, "xw", "buf-wipeout");
-    modemap->op->set_key(modemap, "ob", "buf-sort-bufnr");
-    modemap->op->set_key(modemap, "on", "buf-sort-name");
-    modemap->op->set_key(modemap, "op", "buf-sort-path");
-    modemap->op->set_key(modemap, "or", "buf-sort-mru");
-    modemap->op->set_key(modemap, "ox", "buf-sort-ext");
-    modemap->op->set_key(modemap, "u",  "buf-toggle-unlisted");
+    modemap->op->set_key(modemap, VSTR("xd"), VSTR("buf-delete"));
+    modemap->op->set_key(modemap, VSTR("xu"), VSTR("buf-unload"));
+    modemap->op->set_key(modemap, VSTR("xw"), VSTR("buf-wipeout"));
+    modemap->op->set_key(modemap, VSTR("ob"), VSTR("buf-sort-bufnr"));
+    modemap->op->set_key(modemap, VSTR("on"), VSTR("buf-sort-name"));
+    modemap->op->set_key(modemap, VSTR("op"), VSTR("buf-sort-path"));
+    modemap->op->set_key(modemap, VSTR("or"), VSTR("buf-sort-mru"));
+    modemap->op->set_key(modemap, VSTR("ox"), VSTR("buf-sort-ext"));
+    modemap->op->set_key(modemap, VSTR("u"),  VSTR("buf-toggle-unlisted"));
 
     super(BufferItemProvider, default_keymap)(self, puls);
 }

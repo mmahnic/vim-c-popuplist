@@ -46,7 +46,7 @@
   };
 */
 
-static char g_separator[] = "-";
+static char_u g_separator[] = "-";
 
     static void
 _mnupr_init(_self)
@@ -98,7 +98,7 @@ _mnupr_update_title(_self)
     METHOD(MenuItemProvider, update_title);
     char_u* title;
     if (self->cur_menu == root_menu || !self->cur_menu->parent || self->cur_menu->parent == root_menu)
-	self->op->set_title(self, "Menu");
+	self->op->set_title(self, VSTR("Menu"));
     else
     {
 	title = self->cur_menu->parent->dname;
@@ -238,7 +238,7 @@ _mnupr_select_item(_self, item)
 	{
 	    /* If called as 'vmenu', restore the Visual mode (noremap, silent) */
 	    if (mode == MENU_INDEX_VISUAL)
-		exec_normal_cmd("gv", REMAP_NONE, 1);
+		exec_normal_cmd(VSTR("gv"), REMAP_NONE, 1);
 
 	    /* This works both in console and in gui */
 	    exec_normal_cmd(pm->strings[mode], pm->noremap[mode], pm->silent[mode]);

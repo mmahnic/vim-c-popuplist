@@ -43,7 +43,7 @@
     int	    get_tab_size_at(int col);
     void    set_limits(int min_col, int max_col);
     // write the text and fill to max_col with fillChar if it is not NUL
-    int	    write_line(char_u* text, int row, int attr, int fillChar);
+    void    write_line(char_u* text, int row, int attr, int fillChar);
   };
 */
 
@@ -142,7 +142,7 @@ _plwr_set_limits(_self, min_col, max_col)
  * 1236669990123666999		... text width (pwidth)
  *        .. ABCDDD..		... displayed
  */
-    static int
+    static void
 _plwr_write_line(_self, text, row, attr, fillChar)
     void* _self;
     char_u* text;
@@ -417,7 +417,6 @@ _hltxm_calc_attr(_self, next_char)
     char_u* next_char;
 {
     METHOD(TextMatchHighlighter, calc_attr);
-    char_u* pmatch;
     int len;
     if (! self->matcher)
 	return 0;
@@ -443,6 +442,11 @@ _hltxm_calc_attr(_self, next_char)
 /* [ooc]
  *
   // Write text in one line. Take care of line offsets. Expand tabs. Highlight text.
+  //
+  // Uses multiple highliters, eg.: hlsyn, hlshortcut, hlspell, hlsearch, ...
+  //   - each proposes an attr and a length for current char
+  //   - the results are combined; the last one has top priority, unless the
+  //   text is concealed by others
   class LineHighlightWriter(LineWriter) [plhlwr]
   {
     char_u* _tmpbuf;
@@ -450,18 +454,11 @@ _hltxm_calc_attr(_self, next_char)
     Highlighter* highlighters;
     void    init();
     void    destroy();
-    int	    write_line(char_u* text, int row, int init_attr, int fillChar);
+    void    write_line(char_u* text, int row, int init_attr, int fillChar);
 
     // text_end points into _tmpbuf; *text_end will be set to NUL;
-    int	    flush(char_u* text_end, int row, int col, int attr);
+    int	    _flush(char_u* text_end, int row, int col, int attr);
   }
-  // TODO: instead of one highlighter, use multiple highliters: hlsyn,
-  // hlshortcut, hlspell, hlsearch, ...
-  //    - each proposes an attr and a length for current char
-  //    - the results are combined; the last one has top priority, unless
-  //    the text is concealed by others
-  // each highlighter keeps its own record for the start of the next
-  // recognition point; if it is called again before this point ... then what ?
  */
 
     static void
@@ -487,16 +484,16 @@ _plhlwr_destroy(_self)
 }
 
     static int
-_plhlwr_flush(_self, text_end, row, col, attr)
+_plhlwr__flush(_self, text_end, row, col, attr)
     void* _self;
     char_u* text_end;
     int row;
     int col;
     int attr;
 {
-    METHOD(LineHighlightWriter, flush);
-    *text_end = NUL;
+    METHOD(LineHighlightWriter, _flush);
     char_u  *st;
+    *text_end = NUL;
     st = transstr(self->_tmpbuf);
     if (st)
     {
@@ -507,7 +504,7 @@ _plhlwr_flush(_self, text_end, row, col, attr)
     return col; /* number of columns written */
 }
 
-    static int
+    static void
 _plhlwr_write_line(_self, text, row, init_attr, fillChar)
     void* _self;
     char_u* text;
@@ -517,7 +514,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 {
     METHOD(LineHighlightWriter, write_line);
     char_u *p, *s;
-    int pwidth, w, col, endcol, max_pwidth, attr, next_attr;
+    int pwidth, w, col, max_pwidth, attr, next_attr;
     Highlighter_T *phl;
     char_u *ptmp, *ptmplimit;
 
@@ -588,7 +585,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 		{
 		    if (s)
 		    {
-			col += self->op->flush(self, s, row, col, attr);
+			col += self->op->_flush(self, s, row, col, attr);
 			s = NULL;
 		    }
 		    attr =next_attr;
@@ -642,7 +639,7 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
 	/* output */
 	if (s)
 	{
-	    col += self->op->flush(self, s, row, col, attr);
+	    col += self->op->_flush(self, s, row, col, attr);
 	    s = NULL;
 	}
     }

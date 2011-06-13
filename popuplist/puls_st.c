@@ -722,7 +722,7 @@ _sgarr__qsort (_self, low, high, cmp)
 	     * parent info with current info on the stack. In fact we can
 	     * replace all such consequtive parents. */
 	    i = stackitem;
-	    while (i > 0 && (stack[i-1].todo & (QS_LEFT | QS_RIGHT) == 0))
+	    while (i > 0 && (stack[i-1].todo & (QS_LEFT | QS_RIGHT)) == 0)
 		i--;
 	    if (i != stackitem)
 	    {

@@ -30,9 +30,10 @@
 
 #if defined(FEAT_POPUPLIST)
 
-#define EQUALS(a, b)  (0 == strcmp(a, b))
-#define EQUALSN(a, b, n)  (0 == strncmp(a, b, n))
-#define STARTSWITH(str, prefix)  (0 == strncmp(str, prefix, strlen(prefix)))
+#define VSTR(s)   ((char_u*)s)
+#define EQUALS(a, b)  (0 == strcmp((char*)a, (char*)b))
+#define EQUALSN(a, b, n)  (0 == strncmp((char*)a, (char*)b, n))
+#define STARTSWITH(str, prefix)  (0 == strncmp((char*)str, (char*)prefix, strlen((char*)prefix)))
 #ifdef FEAT_MBYTE
 #define ADVANCE_CHAR_P(p) mb_ptr_adv(p)
 #else
@@ -45,16 +46,19 @@ static dictitem_T dumdi;
 #define HIKEY2DI(p)  ((dictitem_T *)(p - (dumdi.di_key - (char_u *)&dumdi)))
 #define HI2DI(hi)     HIKEY2DI((hi)->hi_key)
 
+/* Required imports from eval.c */
+/* TODO: move to a header file */
+extern int call_func __ARGS((char_u *funcname, int len, typval_T *rettv, int argcount, typval_T *argvars, linenr_T firstline, linenr_T lastline, int *doesrange, int evaluate, dict_T *selfdict));
+extern void dict_unref __ARGS((dict_T *d));
+extern void dictitem_remove __ARGS((dict_T *dict, dictitem_T *item));
+
+/* Some constants */
 static char_u blankline[] = "";
-static char_u str_type_list[] = "<list>";
-static char_u str_type_dict[] = "<dict>";
-static char_u str_type_func[] = "<func>";
 static char_u cmd_quit[] = "quit";
 static char_u cmd_accept[] = "accept";
-static char_u fld_next_cmd[] = "nextcmd";
 
-#define DEBUG
-#define INCLUDE_TESTS
+/*#define DEBUG*/
+/*#define INCLUDE_TESTS*/
 
 #if (defined(INCLUDE_TESTS) || defined(DEBUG))
 static char_u str_pulstest[] = "*test*";
@@ -115,19 +119,19 @@ limit_value(value, vmin, vmax)
  * Search for needle in haystack, ignoring case.
  * Doesn't work for multi-byte characters.
  */
-    static char*
+    static char_u*
 _stristr(haystack, needle)
-    const char* haystack;
-    const char* needle;
+    char_u* haystack;
+    char_u* needle;
 {
-    char* p;
+    char_u* p;
     int hs = STRLEN(haystack);
     int ns = STRLEN(needle);
     if (hs < ns)
 	return NULL;
 
     hs -= ns;
-    p = (char*) haystack;
+    p = haystack;
     while (hs >= 0)
     {
 	if (0 == STRNICMP(p, needle, ns))
@@ -172,10 +176,10 @@ _str_free(str)
 /* Attribute intialization. Use custom names for the popup list.
  * If a name doesn't exist in the syntax table, use PUM values. */
 typedef struct _puls_hl_attrs_T {
-    char* name;		/* name used in syntax files */
-    int   attr;		/* attribute returned by syn_id2attr */
+    char_u* name;		/* name used in syntax files */
+    int     attr;		/* attribute returned by syn_id2attr */
 
-    /* Positive: PUM HLF_xxx values to get default attr values.
+    /* Positive: PUM HLF_xxx values are used to get the default attr values.
      * Negative or zero: index into _puls_hl_attrs, a back-reference. */
     int   default_id;
 } _puls_hl_attrs_T;
@@ -201,25 +205,25 @@ typedef struct _puls_hl_attrs_T {
 #define PULSATTR_HL_USER	18
 
 static _puls_hl_attrs_T _puls_hl_attrs[] = {
-    { "PulsNormal",	    0, HLF_PNI },
-    { "PulsSelected",	    0, HLF_PSI },
-    { "PulsTitleItem",	    0, -PULSATTR_NORMAL },
-    { "PulsTitleItemSel",   0, -PULSATTR_SELECTED },
-    { "PulsMarked",	    0, HLF_PSI },
-    { "PulsMarkedSel",	    0, -PULSATTR_SELECTED },
-    { "PulsDisabled",	    0, HLF_PNI },
-    { "PulsDisabledSel",    0, -PULSATTR_SELECTED },
-    { "PulsBorder",	    0, -PULSATTR_NORMAL },
-    { "PulsScrollBar",	    0, -PULSATTR_BORDER },
-    { "PulsScrollThumb",    0, HLF_PST },
-    { "PulsScrollBarSpace", 0, HLF_PSB },
-    { "PulsInput",	    0, -PULSATTR_BORDER },
-    { "PulsInputActive",    0, HLF_PSI },
-    { "PulsShortcut",       0, HLF_PSI },
-    { "PulsShortcutSel",    0, HLF_PSI },
-    { "PulsHlFilter",       0, HLF_V },
-    { "PulsHlSearch",       0, HLF_I },
-    { "PulsHlUser",         0, HLF_L }
+    { VSTR("PulsNormal"),	    0, HLF_PNI },
+    { VSTR("PulsSelected"),	    0, HLF_PSI },
+    { VSTR("PulsTitleItem"),	    0, -PULSATTR_NORMAL },
+    { VSTR("PulsTitleItemSel"),	    0, -PULSATTR_SELECTED },
+    { VSTR("PulsMarked"),	    0, HLF_PSI },
+    { VSTR("PulsMarkedSel"),	    0, -PULSATTR_SELECTED },
+    { VSTR("PulsDisabled"),	    0, HLF_PNI },
+    { VSTR("PulsDisabledSel"),	    0, -PULSATTR_SELECTED },
+    { VSTR("PulsBorder"),	    0, -PULSATTR_NORMAL },
+    { VSTR("PulsScrollBar"),	    0, -PULSATTR_BORDER },
+    { VSTR("PulsScrollThumb"),	    0, HLF_PST },
+    { VSTR("PulsScrollBarSpace"),   0, HLF_PSB },
+    { VSTR("PulsInput"),	    0, -PULSATTR_BORDER },
+    { VSTR("PulsInputActive"),	    0, HLF_PSI },
+    { VSTR("PulsShortcut"),	    0, HLF_PSI },
+    { VSTR("PulsShortcutSel"),	    0, HLF_PSI },
+    { VSTR("PulsHlFilter"),	    0, HLF_V },
+    { VSTR("PulsHlSearch"),	    0, HLF_I },
+    { VSTR("PulsHlUser"),	    0, HLF_L }
 };
 
     static void
@@ -386,7 +390,7 @@ _cmdque_add(_self, command)
 	    ++ps;
 	pe = vim_strchr(ps, '|');
     }
-    pe = strchr(ps, NUL); /* find end of string; *don't* use vim_strchr! */
+    pe = (char_u*)strchr((char*)ps, NUL); /* find end of string; *don't* use vim_strchr! */
     --pe;
     while (isspace(*pe) && pe > ps)
 	--pe;
@@ -534,6 +538,7 @@ _ppit_destroy(_self)
     // the provider handles the command and returns the next command
     char_u*	handle_command(PopupList* puls, char_u* command);
     int		vim_cb_command(PopupList* puls, char_u* command, typval_T* rettv);
+    void	_process_vim_cb_result(PopupList* puls, dict_T* options);
 
     // the provider can provide default keymaps for its commands
     void	default_keymap(PopupList* puls);
@@ -558,7 +563,6 @@ _iprov_init(_self)
 _iprov_destroy(_self)
     void* _self;
 {
-    int i;
     METHOD(ItemProvider, destroy);
     /* delete cached text from items */
     self->op->clear_items(self);
@@ -599,7 +603,6 @@ _iprov_on_start(_self)
 _iprov_clear_items(_self)
     void* _self;
 {
-    int i;
     METHOD(ItemProvider, clear_items);
     /* clear deletes cached text from items */
     self->items->op->clear(self->items);
@@ -609,7 +612,6 @@ _iprov_clear_items(_self)
 _iprov_sync_items(_self)
     void* _self;
 {
-    int i;
     METHOD(ItemProvider, sync_items);
 }
 
@@ -816,21 +818,43 @@ _iprov_handle_command(_self, puls, command)
     char_u*	    command;
 {
     METHOD(ItemProvider, handle_command);
-    dictitem_T* option;
     typval_T rettv;
 
-    vim_memset(&rettv, 0, sizeof(typval_T)); /* init_tv is not accessible */
+    vim_memset(&rettv, 0, sizeof(typval_T)); /* XXX: init_tv is not accessible */
     self->op->vim_cb_command(self, puls, command, &rettv);
 
-    if (rettv.v_type == VAR_DICT)
+    if (rettv.v_type == VAR_DICT && rettv.vval.v_dict)
     {
-	option = dict_find(rettv.vval.v_dict, fld_next_cmd, -1L);
-	if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
-	    puls->cmds_macro->op->add(puls->cmds_macro, option->di_tv.vval.v_string);
+	self->op->_process_vim_cb_result(self, puls, rettv.vval.v_dict);
     }
-    clear_tv(&rettv); /* TODO: extract possible next command and return it */
+    clear_tv(&rettv);
 
     return NULL;
+}
+
+    static void
+_iprov__process_vim_cb_result(_self, puls, options)
+    void*	    _self;
+    PopupList_T*    puls;
+    dict_T*	    options;
+{
+    METHOD(ItemProvider, _process_vim_cb_result);
+    dictitem_T* option;
+    if (! options)
+	return;
+    if (puls)
+    {
+	option = dict_find(options, VSTR("nextcmd"), -1L);
+	if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+	    puls->cmds_macro->op->add(puls->cmds_macro, option->di_tv.vval.v_string);
+
+	option = dict_find(options, VSTR("redraw"), -1L);
+	if (option && option->di_tv.v_type == VAR_NUMBER && option->di_tv.vval.v_number)
+	    puls->need_redraw |= PULS_REDRAW_CLEAR;
+    }
+    option = dict_find(options, VSTR("title"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING)
+	self->op->set_title(self, option->di_tv.vval.v_string);
 }
 
     static int
@@ -853,7 +877,6 @@ _iprov_vim_cb_command(_self, puls, command, rettv)
     {
 	typval_T    argv[2 + 1]; /* command, status */
 	int	    argc = 0;
-	listitem_T  *item;
 	int	    dummy;
 	dict_T	    *selfdict = NULL;
 	char_u	    *fn = icmd->di_tv.vval.v_string;
@@ -979,7 +1002,7 @@ _vlprov_read_options(_self, options)
     dictitem_T* option;
     super(VimlistItemProvider, read_options)(self, options);
 
-    option = dict_find(options, "titles", -1L);
+    option = dict_find(options, (char_u*)"titles", -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
 	if (option->di_tv.vval.v_string && *option->di_tv.vval.v_string)
@@ -1025,6 +1048,8 @@ _vlprov__cache_list_item(_self, pitem)
     METHOD(VimlistItemProvider, _cache_list_item);
     char_u numbuf[NUMBUFLEN];
     PopupItem_T* pit = NULL;
+    static char_u str_list[] = "<list>";
+    static char_u str_dict[] = "<dict>";
     switch (pitem->li_tv.v_type)
     {
 	default:
@@ -1049,10 +1074,10 @@ _vlprov__cache_list_item(_self, pitem)
 	    break;
 #endif
 	case VAR_LIST:
-	    pit = self->op->append_pchar_item(self, str_type_list, ITEM_SHARED);
+	    pit = self->op->append_pchar_item(self, str_list, ITEM_SHARED);
 	    break;
 	case VAR_DICT:
-	    pit = self->op->append_pchar_item(self, str_type_dict, ITEM_SHARED);
+	    pit = self->op->append_pchar_item(self, str_dict, ITEM_SHARED);
 	    break;
     }
 
@@ -1125,7 +1150,6 @@ _vlprov_update_result(_self, status)
     dict_T*	status;
 {
     METHOD(VimlistItemProvider, update_result);
-    dictitem_T* pdi;
     if (status && self->vimlist)
     {
 	dict_add_list(status, "items", self->vimlist);
@@ -1159,7 +1183,6 @@ _vlprov_handle_command(_self, puls, command)
      *
      */
     must_rebuild = 0;
-    i = 0;
     if (self->op->get_item_count(self) != self->vimlist->lv_len)
     {
 	LOG(("List size changed. The list must be rebuilt."));
@@ -1167,6 +1190,7 @@ _vlprov_handle_command(_self, puls, command)
     }
     else
     {
+	i = 0;
 	for (pitem = self->vimlist->lv_first; pitem != NULL; ++i, pitem = pitem->li_next)
 	{
 	    ppit = self->op->get_item(self, i);
@@ -1184,11 +1208,14 @@ _vlprov_handle_command(_self, puls, command)
      *    when we replace the items, must_rebuild will be 1, so the above
      *    verification is not necessary.
      *  TODO: if the list was initilally locked, we shouldn't modify it.
+     *  TODO: a new title can be set with the rettv field "title"
      */
 
-    if (rettv.v_type == VAR_DICT)
+    if (rettv.v_type == VAR_DICT && rettv.vval.v_dict)
     {
-	option = dict_find(rettv.vval.v_dict, "additems", -1L);
+	self->op->_process_vim_cb_result(self, puls, rettv.vval.v_dict);
+
+	option = dict_find(rettv.vval.v_dict, VSTR("additems"), -1L);
 	if (option && option->di_tv.v_type == VAR_LIST)
 	{
 	    for (pitem = option->di_tv.vval.v_list->lv_first; pitem != NULL; pitem = pitem->li_next)
@@ -1210,12 +1237,8 @@ _vlprov_handle_command(_self, puls, command)
 		}
 	    }
 	}
-
-	option = dict_find(rettv.vval.v_dict, fld_next_cmd, -1L);
-	if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
-	    puls->cmds_macro->op->add(puls->cmds_macro, option->di_tv.vval.v_string);
     }
-    clear_tv(&rettv); /* TODO: extract possible next command and return it */
+    clear_tv(&rettv);
 
     if (must_rebuild)
     {
@@ -1274,7 +1297,7 @@ _vlprov_get_display_text(_self, item)
     int right();   // right column
     int bottom();  // bottom row
     void move(int x, int y);
-    void resize(int width, int height);
+    // [unused] void resize(int width, int height);
   };
 */
 
@@ -1316,6 +1339,7 @@ _box_move(_self, x, y)
     self->top = y;
 }
 
+#if 0
     static void
 _box_resize(_self, width, height)
     void* _self;
@@ -1326,6 +1350,7 @@ _box_resize(_self, width, height)
     self->width = width;
     self->height = height;
 }
+#endif
 
 /* [ooc]
  *
@@ -1396,7 +1421,7 @@ _lned_add_text(_self, ptext)
 	    self->text = (char_u*) vim_realloc(self->text, self->size);
     }
 
-    strcat(self->text, ptext);
+    STRCAT(self->text, ptext);
     self->len = nlen;
     return 1;
 }
@@ -1503,8 +1528,7 @@ _txm_match(_self, haystack)
     char_u* haystack;
 {
     METHOD(TextMatcher, match);
-    char *p;
-    char_u* needle;
+    char_u *p, *needle;
     ulong score;
     int d;
     if (! haystack || ! *haystack)
@@ -1517,7 +1541,7 @@ _txm_match(_self, haystack)
     if (! p)
 	return 0;
     score = 1;
-    d = p - (char*)haystack;
+    d = p - haystack;
     if (d < 50)
        score += 50 - d;
     /* simplistic start-of-word check */
@@ -1820,7 +1844,7 @@ _txmwrds_get_match_at(_self, haystack)
 	{ 
 	    if (! *pexpr->yes_words[i]) /* empty word */
 		continue;
-	    n = strlen(pexpr->yes_words[i]);
+	    n = STRLEN(pexpr->yes_words[i]);
 	    if (0 == STRNICMP(haystack, pexpr->yes_words[i], n))
 		return n;
 	}
@@ -2006,7 +2030,7 @@ _txmcmdt_match(_self, haystack)
     METHOD(TextMatcherCmdT, match);
     int		stack_pos;
     char_u	*first_pos, *last_pos, *last_retry_pos;
-    char_u	*p, *pend;
+    char_u	*p;
     ulong	score, best_score;
     /* copies of members */
     int		need_len;
@@ -2847,10 +2871,10 @@ _skmap_encode_key(_self, sequence)
     char_u* raw;
 
     /* enclose in quotes to create a vim string */
-    raw = vim_strsave_escaped(sequence, "\"<");
+    raw = vim_strsave_escaped(sequence, VSTR("\"<"));
     seq[0] = '"';
     STRNCPY(&seq[1], raw, 126);
-    strcat(seq, "\"");
+    STRCAT(seq, "\"");
     vim_free(raw);
 
     /* evaluate the vim string */
@@ -2886,7 +2910,7 @@ _skmap_set_key(_self, sequence, command)
     pi = dict_find(self->key2cmd, sequence, -1);
     if (pi)
 	dictitem_remove(self->key2cmd, pi); /* TODO: make dictitem_remove non-static in eval.c */
-    dict_add_nr_str(self->key2cmd, sequence, 0, command);
+    dict_add_nr_str(self->key2cmd, (char*)sequence, 0, command);
 }
 
     static char_u*
@@ -2915,10 +2939,9 @@ _skmap_find_key(_self, sequence)
     char_u* sequence;
 {
     METHOD(SimpleKeymap, find_key);
-    hashitem_T	*hi;
     dictitem_T* seqmap;
     DictIterator_T itkeys;
-    int seq_len, match, todo;
+    int seq_len, match;
 
     match = 0; /* KM_NOTFOUND */
     seqmap = dict_find(self->key2cmd, sequence, -1L);
@@ -3455,13 +3478,14 @@ _puls_init(_self)
     self->isearch = new_ISearch();
     self->filter = new_ItemFilter();
     self->km_normal = new_SimpleKeymap();
-    self->km_normal->op->set_name(self->km_normal, "normal"); /* TODO: add parameter: mode_indicator, eg. "/" */
+    /* TODO: add parameter: mode_indicator, eg. "/" */
+    self->km_normal->op->set_name(self->km_normal, VSTR("normal"));
     self->km_filter = new_SimpleKeymap();
-    self->km_filter->op->set_name(self->km_filter, "filter");
+    self->km_filter->op->set_name(self->km_filter, VSTR("filter"));
     self->km_search = new_SimpleKeymap();
-    self->km_search->op->set_name(self->km_search, "search");
+    self->km_search->op->set_name(self->km_search, VSTR("search"));
     self->km_shortcut = new_SimpleKeymap();
-    self->km_shortcut->op->set_name(self->km_shortcut, "shortcut");
+    self->km_shortcut->op->set_name(self->km_shortcut, VSTR("shortcut"));
     self->modemap = self->km_normal;
     self->cmds_keyboard = new_CommandQueue();
     self->cmds_macro = new_CommandQueue();
@@ -3539,6 +3563,7 @@ _puls_on_model_title_changed(_self, data)
     METHOD(PopupList, on_model_title_changed);
     if (self->model)
 	self->op->set_title(self, self->model->op->get_title(self->model));
+    return 1;
 }
 
     static void
@@ -3550,7 +3575,7 @@ _puls_read_options(_self, options)
     dictitem_T *option, *di;
     DictIterator_T itd;
 
-    option = dict_find(options, "keymap", -1L);
+    option = dict_find(options, VSTR("keymap"), -1L);
     if (option && option->di_tv.v_type == VAR_DICT)
     {
 	/* create the keymaps */
@@ -3566,7 +3591,7 @@ _puls_read_options(_self, options)
 	}
     }
 
-    option = dict_find(options, "pos", -1L);
+    option = dict_find(options, VSTR("pos"), -1L);
     if (option && self->aligner)
     {
 	if (option->di_tv.v_type == VAR_STRING)
@@ -3577,13 +3602,13 @@ _puls_read_options(_self, options)
 	    self->aligner->op->set_align_params(self->aligner, option->di_tv.vval.v_dict);
     }
 
-    option = dict_find(options, "mode", -1L);
+    option = dict_find(options, VSTR("mode"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
 	self->op->switch_mode(self, option->di_tv.vval.v_string);
     }
 
-    option = dict_find(options, "highlight", -1L);
+    option = dict_find(options, VSTR("highlight"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
 	if (! self->user_matcher)
@@ -3597,7 +3622,7 @@ _puls_read_options(_self, options)
 	self->hl_user->match_attr = _puls_hl_attrs[PULSATTR_HL_USER].attr;
     }
 
-    option = dict_find(options, "current", -1L);
+    option = dict_find(options, VSTR("current"), -1L);
     if (option && option->di_tv.v_type == VAR_NUMBER)
     {
 	self->current = option->di_tv.vval.v_number;
@@ -3605,7 +3630,15 @@ _puls_read_options(_self, options)
 	    self->current = 0;
     }
 
-    option = dict_find(options, fld_next_cmd, -1L);
+    option = dict_find(options, VSTR("columns"), -1L);
+    if (option && option->di_tv.v_type == VAR_NUMBER)
+    {
+	self->column_split = (option->di_tv.vval.v_number != 0);
+	if (self->current < 0)
+	    self->current = 0;
+    }
+
+    option = dict_find(options, VSTR("nextcmd"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
 	self->cmds_macro->op->add(self->cmds_macro, option->di_tv.vval.v_string);
 }
@@ -3630,48 +3663,48 @@ _puls_default_keymap(_self)
 
     modemap = self->km_normal;
     modemap->op->clear_all_keys(modemap);
-    modemap->op->set_key(modemap, "q", "quit");
-    modemap->op->set_key(modemap, "j", "next-item");
-    modemap->op->set_key(modemap, "k", "prev-item");
-    modemap->op->set_key(modemap, "n", "next-page"); /* XXX:? <space> */
-    modemap->op->set_key(modemap, "p", "prev-page"); /* XXX:? <b> */
-    modemap->op->set_key(modemap, "gg", "go-home");
-    modemap->op->set_key(modemap, "G", "go-end");
-    modemap->op->set_key(modemap, "h", "shift-left");
-    modemap->op->set_key(modemap, "l", "shift-right");
-    modemap->op->set_key(modemap, "m", "toggle-marked");
-    modemap->op->set_key(modemap, "f", "modeswitch:filter");
-    modemap->op->set_key(modemap, "%", "modeswitch:filter");
-    modemap->op->set_key(modemap, "/", "modeswitch:search");
-    modemap->op->set_key(modemap, "&", "modeswitch:shortcut");
-    modemap->op->set_vim_key(modemap, "<c-n>", "isearch-next");
-    modemap->op->set_vim_key(modemap, "<c-p>", "isearch-prev");
-    modemap->op->set_vim_key(modemap, "<c-l>", "auto-resize");
-    modemap->op->set_vim_key(modemap, "<c-t>", "filter-toggle-titles");
-    modemap->op->set_vim_key(modemap, "<tab>", "next-item");
-    modemap->op->set_vim_key(modemap, "<s-tab>", "prev-item");
-    modemap->op->set_vim_key(modemap, "<down>", "next-item");
-    modemap->op->set_vim_key(modemap, "<up>", "prev-item");
-    modemap->op->set_vim_key(modemap, "<pagedown>", "next-page");
-    modemap->op->set_vim_key(modemap, "<pageup>", "prev-page");
-    modemap->op->set_vim_key(modemap, "<home>", "go-home");
-    modemap->op->set_vim_key(modemap, "<end>", "go-end");
-    modemap->op->set_vim_key(modemap, "<left>", "shift-left");
-    modemap->op->set_vim_key(modemap, "<right>", "shift-right");
-    modemap->op->set_vim_key(modemap, "<cr>", "accept");
-    modemap->op->set_vim_key(modemap, "<backspace>", "select-parent");
-    modemap->op->set_vim_key(modemap, "<esc>", "quit");
+    modemap->op->set_key(modemap, VSTR("q"), VSTR("quit"));
+    modemap->op->set_key(modemap, VSTR("j"), VSTR("next-item"));
+    modemap->op->set_key(modemap, VSTR("k"), VSTR("prev-item"));
+    modemap->op->set_key(modemap, VSTR("n"), VSTR("next-page")); /* XXX:? <space> */
+    modemap->op->set_key(modemap, VSTR("p"), VSTR("prev-page")); /* XXX:? <b> */
+    modemap->op->set_key(modemap, VSTR("gg"), VSTR("go-home"));
+    modemap->op->set_key(modemap, VSTR("G"), VSTR("go-end"));
+    modemap->op->set_key(modemap, VSTR("h"), VSTR("shift-left"));
+    modemap->op->set_key(modemap, VSTR("l"), VSTR("shift-right"));
+    modemap->op->set_key(modemap, VSTR("m"), VSTR("toggle-marked|next-item"));
+    modemap->op->set_key(modemap, VSTR("f"), VSTR("modeswitch:filter"));
+    modemap->op->set_key(modemap, VSTR("%"), VSTR("modeswitch:filter"));
+    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:search"));
+    modemap->op->set_key(modemap, VSTR("&"), VSTR("modeswitch:shortcut"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-n>"), VSTR("isearch-next"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-p>"), VSTR("isearch-prev"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-l>"), VSTR("auto-resize"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-t>"), VSTR("filter-toggle-titles"));
+    modemap->op->set_vim_key(modemap, VSTR("<tab>"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<s-tab>"), VSTR("prev-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<down>"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<up>"), VSTR("prev-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<pagedown>"), VSTR("next-page"));
+    modemap->op->set_vim_key(modemap, VSTR("<pageup>"), VSTR("prev-page"));
+    modemap->op->set_vim_key(modemap, VSTR("<home>"), VSTR("go-home"));
+    modemap->op->set_vim_key(modemap, VSTR("<end>"), VSTR("go-end"));
+    modemap->op->set_vim_key(modemap, VSTR("<left>"), VSTR("shift-left"));
+    modemap->op->set_vim_key(modemap, VSTR("<right>"), VSTR("shift-right"));
+    modemap->op->set_vim_key(modemap, VSTR("<cr>"), VSTR("accept"));
+    modemap->op->set_vim_key(modemap, VSTR("<backspace>"), VSTR("select-parent"));
+    modemap->op->set_vim_key(modemap, VSTR("<esc>"), VSTR("quit"));
 #ifdef DEBUG
     /* This sequence is ambiguous in a terminal: '<a-d>' -> '<esc>d'.
      * :map <a-d> ... creates lhs='ä' instead of lhs='<esc>d';
      * a terminal (gnome, konsole) sends '<esc>d'; gui sends 'ä'.
      * see |map-alt-keys|.
      * */
-    modemap->op->set_vim_key(modemap, "<a-d>", "next-item");
-    modemap->op->set_vim_key(modemap, "<esc>d", "next-item");
+    modemap->op->set_vim_key(modemap, VSTR("<a-d>"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<esc>d"), VSTR("next-item"));
 
-    modemap->op->set_vim_key(modemap, "aa", "next-item");
-    modemap->op->set_vim_key(modemap, "aab", "prev-item");
+    modemap->op->set_vim_key(modemap, VSTR("aa"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("aab"), VSTR("prev-item"));
 #endif
 
     for (i = 0; i < 2; i++)
@@ -3687,38 +3720,38 @@ _puls_default_keymap(_self)
 	    modemap->mode_char = '/';
 	}
 	modemap->op->clear_all_keys(modemap);
-	modemap->op->set_vim_key(modemap, "<cr>", "accept");
-	modemap->op->set_vim_key(modemap, "<tab>", "modeswitch:normal|next-item");
-	modemap->op->set_vim_key(modemap, "<s-tab>", "modeswitch:normal|prev-item");
-	modemap->op->set_vim_key(modemap, "<esc>", "modeswitch:normal");
-	modemap->op->set_vim_key(modemap, "<backspace>", "input-bs");
-	modemap->op->set_vim_key(modemap, "<c-u>", "input-clear");
+	modemap->op->set_vim_key(modemap, VSTR("<cr>"), VSTR("accept"));
+	modemap->op->set_vim_key(modemap, VSTR("<tab>"), VSTR("modeswitch:normal|next-item"));
+	modemap->op->set_vim_key(modemap, VSTR("<s-tab>"), VSTR("modeswitch:normal|prev-item"));
+	modemap->op->set_vim_key(modemap, VSTR("<esc>"), VSTR("modeswitch:normal"));
+	modemap->op->set_vim_key(modemap, VSTR("<backspace>"), VSTR("input-bs"));
+	modemap->op->set_vim_key(modemap, VSTR("<c-u>"), VSTR("input-clear"));
 	modemap->has_insert = 1;
     }
     modemap = self->km_filter;
-    modemap->op->set_vim_key(modemap, "<c-f>", "filter-next-matcher");
-    modemap->op->set_vim_key(modemap, "<c-t>", "filter-toggle-titles");
+    modemap->op->set_vim_key(modemap, VSTR("<c-f>"), VSTR("filter-next-matcher"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-t>"), VSTR("filter-toggle-titles"));
     modemap = self->km_search;
-    modemap->op->set_vim_key(modemap, "<c-n>", "isearch-next");
-    modemap->op->set_vim_key(modemap, "<c-p>", "isearch-prev");
-    modemap->op->set_vim_key(modemap, "<c-f>", "isearch-next-matcher");
+    modemap->op->set_vim_key(modemap, VSTR("<c-n>"), VSTR("isearch-next"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-p>"), VSTR("isearch-prev"));
+    modemap->op->set_vim_key(modemap, VSTR("<c-f>"), VSTR("isearch-next-matcher"));
 
     modemap = self->km_shortcut;
     modemap->mode_char = '&';
-    modemap->op->set_key(modemap, "%", "modeswitch:filter");
-    modemap->op->set_key(modemap, "/", "modeswitch:search");
-    modemap->op->set_key(modemap, "&", "modeswitch:normal");
-    modemap->op->set_vim_key(modemap, "<tab>", "next-item");
-    modemap->op->set_vim_key(modemap, "<s-tab>", "prev-item");
-    modemap->op->set_vim_key(modemap, "<down>", "next-item");
-    modemap->op->set_vim_key(modemap, "<up>", "prev-item");
-    modemap->op->set_vim_key(modemap, "<pagedown>", "next-page");
-    modemap->op->set_vim_key(modemap, "<pageup>", "prev-page");
-    modemap->op->set_vim_key(modemap, "<left>", "shift-left");
-    modemap->op->set_vim_key(modemap, "<right>", "shift-right");
-    modemap->op->set_vim_key(modemap, "<cr>", "accept");
-    modemap->op->set_vim_key(modemap, "<esc>", "quit");
-    modemap->op->set_vim_key(modemap, "<backspace>", "select-parent");
+    modemap->op->set_key(modemap, VSTR("%"), VSTR("modeswitch:filter"));
+    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:search"));
+    modemap->op->set_key(modemap, VSTR("&"), VSTR("modeswitch:normal"));
+    modemap->op->set_vim_key(modemap, VSTR("<tab>"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<s-tab>"), VSTR("prev-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<down>"), VSTR("next-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<up>"), VSTR("prev-item"));
+    modemap->op->set_vim_key(modemap, VSTR("<pagedown>"), VSTR("next-page"));
+    modemap->op->set_vim_key(modemap, VSTR("<pageup>"), VSTR("prev-page"));
+    modemap->op->set_vim_key(modemap, VSTR("<left>"), VSTR("shift-left"));
+    modemap->op->set_vim_key(modemap, VSTR("<right>"), VSTR("shift-right"));
+    modemap->op->set_vim_key(modemap, VSTR("<cr>"), VSTR("accept"));
+    modemap->op->set_vim_key(modemap, VSTR("<esc>"), VSTR("quit"));
+    modemap->op->set_vim_key(modemap, VSTR("<backspace>"), VSTR("select-parent"));
 }
 
     static void
@@ -3809,6 +3842,8 @@ _puls_calc_size(_self, limit_width, limit_height)
     limit_width =  limit_value(limit_width, PULS_MIN_WIDTH, Columns-2);
     limit_height = limit_value(limit_height, 1, Rows-2);
     item_count = self->model->op->get_item_count(self->model);
+    max_width = 0;
+    max_width_1 = 0;
 
     /* TODO: the PULS could be configured for autosize. In this case we would measure
      * the size of filtered items instead of all items.
@@ -3817,7 +3852,6 @@ _puls_calc_size(_self, limit_width, limit_height)
     /* Compute the width of the widest item. */
     if ( ! self->column_split) 
     {
-	max_width = 0;
 	for (i = 0; i < item_count; ++i)
 	{
 	    text = self->model->op->get_display_text(self->model, i);
@@ -3830,8 +3864,6 @@ _puls_calc_size(_self, limit_width, limit_height)
     }
     else
     {
-	max_width = 0;
-	max_width_1 = 0;
 	for (i = 0; i < item_count; ++i)
 	{
 	    start = self->model->op->get_display_text(self->model, i);
@@ -3983,7 +4015,6 @@ _puls_redraw(_self)
     int		attr;
     int		attr_norm   = _puls_hl_attrs[PULSATTR_NORMAL].attr;
     int		attr_select = _puls_hl_attrs[PULSATTR_SELECTED].attr;
-    int		attr_mark   = _puls_hl_attrs[PULSATTR_MARKED].attr;
     int		menu_mode;
     char_u	*text;
     int		item_count;
@@ -4176,6 +4207,7 @@ _puls_on_filter_change(_self, data)
     if (self->hl_filter)
 	self->hl_filter->op->set_pattern(self->hl_filter, self->filter->text);
      */
+    return 1;
 }
 
     static int
@@ -4249,6 +4281,7 @@ _puls_on_isearch_change(_self, data)
     */
 
     self->op->do_isearch(self, 1);
+    return 1;
 }
 
 /* TODO: create a real factory class. */
@@ -4408,7 +4441,7 @@ _puls_do_command(_self, command)
 	{
 	    if (self->line_edit->len)
 	    {
-		self->line_edit->op->set_text(self->line_edit, "");
+		self->line_edit->op->set_text(self->line_edit, VSTR(""));
 		self->line_edit->change_obsrvrs.op->notify(&self->line_edit->change_obsrvrs, NULL);
 	    }
 	}
@@ -4684,7 +4717,6 @@ _puls_process_command(_self, command)
     }
     else if (STARTSWITH(command, "accept:"))
     {
-	int cont;
 	int idx_model = self->filter->op->get_model_index(self->filter, self->current);
 
 	if (pmodel->op->has_flag(pmodel, idx_model, ITEM_DISABLED | ITEM_SEPARATOR))
@@ -4723,7 +4755,7 @@ _puls_test_loop(pplist, rettv)
     PopupList_T* pplist;
     typval_T*    rettv;
 {
-    char buf[32]; /* XXX: small, but remove from stack anyway */
+    char_u buf[32]; /* XXX: small, but remove from stack anyway */
     SimpleKeymap_T *modemap;
     ItemProvider_T *pmodel;
     WindowBorder_T *pborder;
@@ -4733,7 +4765,6 @@ _puls_test_loop(pplist, rettv)
 #define MAX_SEQ_LEN	8*MAX_KEY_SIZE
     char_u sequence[MAX_SEQ_LEN];	/* current input sequence. XXX: remove from stack */
     char_u *ps;
-    dictitem_T* seqmap;
     char_u* command;
     int rv, seq_len, key, found, prev_found, hh, de;
     int avail, sleep_count;
@@ -4761,6 +4792,8 @@ _puls_test_loop(pplist, rettv)
     *ps = NUL;
     pplist->need_redraw = PULS_REDRAW_ALL;
     found = KM_NOTFOUND;
+    sleep_count = 0;
+    ambig_timeout = 0;
     for (;;)
     {
 	modemap = pplist->modemap;
@@ -4769,12 +4802,12 @@ _puls_test_loop(pplist, rettv)
 	    int nf = pfilter->op->get_item_count(pfilter);
 	    int nt = pmodel->op->get_item_count(pmodel);
 	    char* pending;
-	    pending = (found & KM_PREFIX) ? sequence : NULL;
+	    pending = (found & KM_PREFIX) ? (char*)sequence : NULL;
 	    if (nf == nt)
-		vim_snprintf(buf, 32, "%d/%d%s%s", pplist->current + 1, nt,
+		vim_snprintf((char*)buf, 32, "%d/%d%s%s", pplist->current + 1, nt,
 			pending ? " " : "", pending ? pending : "");
 	    else
-		vim_snprintf(buf, 32, "%d/%d(%d)%s%s", pplist->current + 1, nf, nt,
+		vim_snprintf((char*)buf, 32, "%d/%d(%d)%s%s", pplist->current + 1, nf, nt,
 			pending ? " " : "", pending ? pending : "");
 	    pborder->op->set_info(pborder, buf);
 	    if (pplist->need_redraw)
@@ -4787,12 +4820,12 @@ _puls_test_loop(pplist, rettv)
 		    else if (modemap == pplist->km_search)
 			ptm = pplist->isearch->matcher;
 		    if (ptm)
-			sprintf(buf, "%c%c", ptm->mode_char, modemap->mode_char);
+			sprintf((char*)buf, "%c%c", ptm->mode_char, modemap->mode_char);
 		    else 
-			sprintf(buf, " %c", modemap->mode_char);
+			sprintf((char*)buf, " %c", modemap->mode_char);
 		}
 		else if (modemap == pplist->km_shortcut)
-		    sprintf(buf, "&&");
+		    sprintf((char*)buf, "&&");
 		else 
 		    buf[0] = NUL;
 		pborder->op->set_mode_text(pborder, buf);
@@ -4824,6 +4857,7 @@ _puls_test_loop(pplist, rettv)
 	 *    - queued 'macro' commands are processed when there is no input,
 	 *    - keys are read when there are no commands in the keyboard command queue.
 	 */
+	key = NUL;
 	avail = (_nextkey() != NUL);
 	if (pplist->cmds_keyboard->op->head(pplist->cmds_keyboard))
 	{
@@ -5060,13 +5094,14 @@ puls_test(argvars, rettv)
     BoxAligner_T* aligner = NULL;
     PopupList_T* pplist = NULL;
     ItemProvider_T* model = NULL;
-    dictitem_T *option, *di;
+    dictitem_T *option;
     DictIterator_T itd;
     char_u* special_items = NULL;
     char_u* title = NULL;
     list_T* items = NULL;
     dict_T* options = NULL;
     int rv;
+    int default_split_columns = 0;
 
     /*_init_vtables();*/
     _update_hl_attrs();
@@ -5114,6 +5149,7 @@ puls_test(argvars, rettv)
 	    BufferItemProvider_T* bmodel = new_BufferItemProvider();
 	    bmodel->op->list_buffers(bmodel);
 	    model = (ItemProvider_T*) bmodel;
+	    default_split_columns = 1;
 	}
 #endif
 #ifdef FEAT_POPUPLIST_MENUS
@@ -5131,6 +5167,7 @@ puls_test(argvars, rettv)
 	    title = NULL;
 	    mmodel->op->list_items(mmodel, NULL);
 	    model = (ItemProvider_T*) mmodel;
+	    default_split_columns = 1;
 	}
 #endif
 #if defined(INCLUDE_TESTS)
@@ -5183,15 +5220,16 @@ puls_test(argvars, rettv)
     if (title)
        model->op->set_title(model, title);
 
-    pplist->column_split = 1; /* TODO: option */
-
     pplist->aligner = aligner;
+    /* TODO: column_split should be set with a call to the provider */
+    /*       eg. model->op->prepare_popuplist(model, pplist) */
+    pplist->column_split = default_split_columns;
 
     if (options)
     {
 	pplist->op->read_options(pplist, options);
 
-	option = dict_find(options, "commands", -1L);
+	option = dict_find(options, VSTR("commands"), -1L);
 	if (model && option && option->di_tv.v_type == VAR_DICT)
 	{
 	    /* XXX: for now, assume the options are const while the popup is running.
