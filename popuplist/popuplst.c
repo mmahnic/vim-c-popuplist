@@ -32,6 +32,7 @@
 
 #define VSTR(s)   ((char_u*)s)
 #define EQUALS(a, b)  (0 == strcmp((char*)a, (char*)b))
+#define IEQUALS(a, b)  (0 == STRICMP((char*)a, (char*)b))
 #define EQUALSN(a, b, n)  (0 == strncmp((char*)a, (char*)b, n))
 #define STARTSWITH(str, prefix)  (0 == strncmp((char*)str, (char*)prefix, strlen((char*)prefix)))
 #ifdef FEAT_MBYTE
@@ -176,8 +177,8 @@ _str_free(str)
 /* Attribute intialization. Use custom names for the popup list.
  * If a name doesn't exist in the syntax table, use PUM values. */
 typedef struct _puls_hl_attrs_T {
-    char_u* name;		/* name used in syntax files */
-    int     attr;		/* attribute returned by syn_id2attr */
+    char_u* name;	/* name used in syntax files */
+    int     attr;	/* attribute returned by syn_id2attr */
 
     /* Positive: PUM HLF_xxx values are used to get the default attr values.
      * Negative or zero: index into _puls_hl_attrs, a back-reference. */
@@ -292,6 +293,8 @@ _update_hl_attrs()
  *	int exec_action(char_u* action, int current)
  *
  *  DONE: The items in the list can be marked.
+ * 
+ *  TODO: do we want to have marked items that are currently hidden by the filter?
  */
 
 /* [ooc]
@@ -894,12 +897,11 @@ _iprov_vim_cb_command(_self, puls, command, rettv)
 	argv[1].vval.v_dict = status;
 	++argc;
 
-	/* XXX-VIM: make call_func non-static in eval.c */
 	call_func(fn, (int)STRLEN(fn), rettv, argc, argv,
 		curwin->w_cursor.lnum, curwin->w_cursor.lnum,
 		&dummy, TRUE, selfdict);
 
-	dict_unref(status); /* could also use clear_tv(&argv[1]) */
+	dict_unref(status);
     }
 
     return 1;
@@ -1153,7 +1155,7 @@ _vlprov_update_result(_self, status)
     if (status && self->vimlist)
     {
 	dict_add_list(status, "items", self->vimlist);
-	self->vimlist->lv_lock |= VAR_LOCKED; /* should also lock the items; expensive */
+	self->vimlist->lv_lock |= VAR_LOCKED;
     }
 }
 
@@ -1170,12 +1172,12 @@ _vlprov_handle_command(_self, puls, command)
     typval_T rettv;
     int must_rebuild, i;
 
-    vim_memset(&rettv, 0, sizeof(typval_T)); /* XXX: init_tv is not accessible */
+    vim_memset(&rettv, 0, sizeof(typval_T)); /* init_tv is not accessible */
     if ( ! self->op->vim_cb_command(self, puls, command, &rettv))
 	return NULL;
 
     if (self->vimlist)
-	self->vimlist->lv_lock = self->_list_lock; /* should also unlock the items; expensive */
+	self->vimlist->lv_lock = self->_list_lock;
 
     /* A verification if the list itemes are still valid, to prevent a crash:
      *   check every ITEM_SHARED if it points to the same address as it did initially.
@@ -1208,7 +1210,6 @@ _vlprov_handle_command(_self, puls, command)
      *    when we replace the items, must_rebuild will be 1, so the above
      *    verification is not necessary.
      *  TODO: if the list was initilally locked, we shouldn't modify it.
-     *  TODO: a new title can be set with the rettv field "title"
      */
 
     if (rettv.v_type == VAR_DICT && rettv.vval.v_dict)
@@ -1474,7 +1475,7 @@ _lned_backspace(_self)
 
     // Init data for the highligter
     void    init_highlight(char_u* haystack);
-    // @returns the length of the match
+    // @returns the length of the match (to be highlighted)
     int     get_match_at(char_u* haystack);
   };
  */
@@ -1999,6 +2000,7 @@ _txmcmdt__calc_pos_score(_self, haystack, positions, npos)
 	    else
 		score += 1000 / d + 1;
 	}
+	/* TODO: cmdt - add score if cur is upper and prev is lower */
 
     }
     return score;
@@ -2166,6 +2168,147 @@ _txmcmdt_get_match_at(_self, haystack)
 
 /* [ooc]
  *
+  typedef void* (*NewObject_Fn)(void);
+
+  class TextMatcherFactoryEntry [tmfent]
+  {
+    TextMatcherFactoryEntry* next;
+    char_u* name;
+    NewObject_Fn fn_new;
+    void init();
+    void destroy();
+    void set(char_u* name, NewObject_Fn fn_new);
+  };
+*/
+
+    static void
+_tmfent_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcherFactoryEntry, init);
+    self->next = NULL;
+    self->name = NULL;
+    self->fn_new = NULL;
+}
+
+    static void
+_tmfent_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcherFactoryEntry, destroy);
+    vim_free(self->name);
+}
+
+    static void
+_tmfent_set(_self, name, fn_new)
+    void* _self;
+    char_u* name;
+    NewObject_Fn fn_new;
+{
+    METHOD(TextMatcherFactoryEntry, set);
+    vim_free(self->name);
+    self->name = vim_strsave(name);
+    self->fn_new = fn_new;
+}
+
+/* [ooc]
+ *
+  class TextMatcherFactory(object) [txmfac]
+  {
+    TextMatcherFactoryEntry* _entries;
+    ListHelper* _lst_entries;
+    void    init();
+    void    destroy();
+    TextMatcher* create_matcher(char_u* name);
+    char_u* next_matcher(char_u* name);
+  };
+*/
+
+    static void
+_txmfac_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcherFactory, init);
+    TextMatcherFactoryEntry_T *pme;
+    self->_entries = NULL;
+    self->_lst_entries = new_ListHelper();
+    self->_lst_entries->first = (void**) &self->_entries;
+    self->_lst_entries->offs_next = offsetof(TextMatcherFactoryEntry_T, next);
+    self->_lst_entries->fn_destroy = &_tmfent_destroy;
+
+    pme = new_TextMatcherFactoryEntry();
+    pme->op->set(pme, VSTR("simple"), (NewObject_Fn) &new_TextMatcher);
+    self->_lst_entries->op->add_tail(self->_lst_entries, pme);
+
+    pme = new_TextMatcherFactoryEntry();
+    pme->op->set(pme, VSTR("words"), (NewObject_Fn) &new_TextMatcherWords);
+    self->_lst_entries->op->add_tail(self->_lst_entries, pme);
+
+    pme = new_TextMatcherFactoryEntry();
+    pme->op->set(pme, VSTR("sparse"), (NewObject_Fn) &new_TextMatcherCmdT);
+    self->_lst_entries->op->add_tail(self->_lst_entries, pme);
+}
+
+    static void
+_txmfac_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcherFactory, destroy);
+    self->_lst_entries->op->delete_all(self->_lst_entries, NULL);
+    CLASS_DELETE(self->_lst_entries);
+}
+
+    static TextMatcher_T*
+_txmfac_create_matcher(_self, name)
+    void* _self;
+    char_u* name;
+{
+    METHOD(TextMatcherFactory, create_matcher);
+    TextMatcherFactoryEntry_T *pme;
+    if (!name)
+	return (TextMatcher_T*) new_TextMatcher();
+
+    pme = self->_entries;
+    while (pme && ! IEQUALS(pme->name, name))
+	pme = pme->next;
+
+    if (pme)
+	return pme->fn_new();
+
+    return NULL;
+}
+
+/* TODO: the default matchers can be selected as options.
+ * filter-matcher, isearch-matcher, highlight-matcher
+ * Maybe add a list of valid matchers for filter and isearch. */
+/* TODO: the current matchers are returned in state so that the caller can restore them on next call. */
+    static char_u*
+_txmfac_next_matcher(_self, name)
+    void* _self;
+    char_u* name;
+{
+    METHOD(TextMatcherFactory, next_matcher);
+    TextMatcherFactoryEntry_T *pme;
+    pme = self->_entries;
+    if (!name && pme)
+	return pme->name;
+
+    while (pme && ! IEQUALS(pme->name, name))
+	pme = pme->next;
+    if (pme)
+	pme = pme->next;
+    else
+	pme = self->_entries;
+
+    if (pme)
+	return pme->name;
+
+    return NULL;
+}
+
+
+/* [ooc]
+ *
   const MAX_FILTER_SIZE = 127;
   class ISearch(object) [isrch]
   {
@@ -2209,7 +2352,8 @@ _isrch_set_matcher(_self, pmatcher)
 	return;
     CLASS_DELETE(self->matcher);
     self->matcher = pmatcher;
-    self->matcher->op->set_search_str(self->matcher, self->text);
+    if (self->matcher)
+	self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
     static void
@@ -2226,7 +2370,8 @@ _isrch_set_text(_self, ptext)
 	STRNCPY(self->text, ptext, MAX_FILTER_SIZE);
 	self->text[MAX_FILTER_SIZE] = NUL;
     }
-    self->matcher->op->set_search_str(self->matcher, self->text);
+    if (self->matcher)
+	self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
     static int
@@ -2239,12 +2384,6 @@ _isrch_match(_self, haystack)
 	return 0;
     return self->matcher->op->match(self->matcher, haystack);
 }
-
-/* 
- * TODO: do we want to have marked items that are currently hidden by the filter?
- *
- * Operation:
- */
 
 /* [ooc]
  *
@@ -2276,7 +2415,7 @@ _isrch_match(_self, haystack)
     SegmentedGrowArray* items; // indices of items in the model
 
     // @var keep_titles defines how titles are treated after filtering.
-    // 0 - Hide titles; items are sorted by score.
+    // 0 - Titles are treated as normal items; items are sorted by score.
     // 1 - Show titles with matching 'child' items and hide other titles.
     //     Titles are sorted by the score of the highest scored child item.
     //     Child items are displayed after the appropriate title, sorted by score.
@@ -2416,7 +2555,8 @@ _iflt_set_matcher(_self, pmatcher)
 	return;
     CLASS_DELETE(self->matcher);
     self->matcher = pmatcher;
-    self->matcher->op->set_search_str(self->matcher, self->text);
+    if (self->matcher)
+	self->matcher->op->set_search_str(self->matcher, self->text);
 }
 
     static void
@@ -2453,7 +2593,7 @@ _iflt_filter_items(_self)
     ItemProvider_T *pmodel;
     PopupItem_T* pit;
     TextMatcher_T* matcher;
-    FltComparator_Score_T cmp;
+    FltComparator_Score_T* pcmp;
     SegmentedGrowArray_T* title_items;
     int item_count, i, handle_titles;
     int *pmi;
@@ -2463,10 +2603,10 @@ _iflt_filter_items(_self)
     if (STRLEN(self->text) < 1 || !self->matcher)
 	return;
 
+    pcmp = NULL;
     pmodel = self->model;
     matcher = self->matcher;
     handle_titles = pmodel->has_title_items;
-    /*matcher->op->set_search_str(matcher, self->text);*/
     item_count = pmodel->op->get_item_count(pmodel);
     for(i = 0; i < item_count; i++)
     {
@@ -2488,10 +2628,12 @@ _iflt_filter_items(_self)
     if (! handle_titles || ! self->keep_titles)
     {
 	/* TODO: an option to sort by score or to keep the original order */
-	init_FltComparator_Score(&cmp);
-	cmp.model = self->model;
-	cmp.reverse = 1;
-	self->items->op->sort(self->items, (ItemComparator_T*)&cmp);
+	if (!pcmp)
+	    pcmp = new_FltComparator_Score();
+	pcmp->model = self->model;
+	pcmp->reverse = 1;
+	self->items->op->sort(self->items, (ItemComparator_T*)pcmp);
+	CLASS_DELETE(pcmp);
 
 	return;
     }
@@ -2536,10 +2678,11 @@ _iflt_filter_items(_self)
     }
 
     /* Each title item gets a unique score based on the sorting order. */
-    init_FltComparator_Score(&cmp);
-    cmp.model = pmodel;
-    cmp.reverse = 1;
-    title_items->op->sort(title_items, (ItemComparator_T*)&cmp);
+    if (!pcmp)
+	pcmp = new_FltComparator_Score();
+    pcmp->model = pmodel;
+    pcmp->reverse = 1;
+    title_items->op->sort(title_items, (ItemComparator_T*)pcmp);
     score = 0xffff; /* ushort_max */
     for (i = 0; i < title_items->len; ++i)
     {
@@ -2555,6 +2698,7 @@ _iflt_filter_items(_self)
 	    --score;
     }
     CLASS_DELETE(title_items);
+    CLASS_DELETE(pcmp);
 
     /* the parent_score of every title is copied to its children */
     score = 0; /* items without a parent will go to the end */
@@ -2575,11 +2719,12 @@ _iflt_filter_items(_self)
 
     /* the items can finally be sorted by parent_score/score */
     {
-	FltComparator_TitleScore_T tcmp;
-	init_FltComparator_TitleScore(&tcmp);
-	tcmp.model = self->model;
-	tcmp.reverse = 1;
-	self->items->op->sort(self->items, (ItemComparator_T*)&tcmp);
+	FltComparator_TitleScore_T* ptcmp;
+	ptcmp = new_FltComparator_TitleScore();
+	ptcmp->model = self->model;
+	ptcmp->reverse = 1;
+	self->items->op->sort(self->items, (ItemComparator_T*)ptcmp);
+	CLASS_DELETE(ptcmp);
     }
 }
 
@@ -2846,7 +2991,7 @@ _skmap_destroy(_self)
     _str_free(&self->name);
     if (self->key2cmd)
     {
-	dict_unref(self->key2cmd); /* TODO: make dict_unref non-static in eval.c */
+	dict_unref(self->key2cmd);
 	self->key2cmd = NULL;
     }
     END_DESTROY(SimpleKeymap);
@@ -2867,19 +3012,19 @@ _skmap_encode_key(_self, sequence)
     char_u* sequence;
 {
     METHOD(SimpleKeymap, encode_key);
-    char_u seq[128]; /* XXX: remove from stack */
-    char_u* raw;
+    char_u *seq, *raw;
 
     /* enclose in quotes to create a vim string */
+    seq = (char_u*) alloc(128);
     raw = vim_strsave_escaped(sequence, VSTR("\"<"));
     seq[0] = '"';
-    STRNCPY(&seq[1], raw, 126);
+    STRNCPY(seq + 1, raw, 126);
     STRCAT(seq, "\"");
     vim_free(raw);
 
     /* evaluate the vim string */
     raw = eval_to_string_safe(seq, NULL, TRUE);
-    /* XXX: diag: printf("seq: '%s', str: '%s', raw: '%s'\n\r", sequence, seq, raw);*/
+    vim_free(seq);
     return raw;
 }
 
@@ -2909,7 +3054,7 @@ _skmap_set_key(_self, sequence, command)
     /* TODO: Check for conflicting sequences */
     pi = dict_find(self->key2cmd, sequence, -1);
     if (pi)
-	dictitem_remove(self->key2cmd, pi); /* TODO: make dictitem_remove non-static in eval.c */
+	dictitem_remove(self->key2cmd, pi);
     dict_add_nr_str(self->key2cmd, (char*)sequence, 0, command);
 }
 
@@ -3408,6 +3553,10 @@ _wbor_draw_item_right(_self, line, current)
     ItemProvider*   model;	// items of the displayed puls
     ItemFilter*	    filter;	// selects a subset of model->items
     ISearch*	    isearch;	// searches for a string in a filtered subset
+    char_u*         filter_matcher_name;
+    char_u*         isearch_matcher_name;
+    TextMatcherFactory* filter_matcher_factory;
+    TextMatcherFactory* isearch_matcher_factory;
     SimpleKeymap*   km_normal;
     SimpleKeymap*   km_filter;
     SimpleKeymap*   km_search;
@@ -3477,6 +3626,10 @@ _puls_init(_self)
     self->need_redraw = 0;
     self->isearch = new_ISearch();
     self->filter = new_ItemFilter();
+    self->filter_matcher_name = vim_strsave(VSTR("words"));
+    self->isearch_matcher_name = vim_strsave(VSTR("simple"));
+    self->filter_matcher_factory = new_TextMatcherFactory();
+    self->isearch_matcher_factory = new_TextMatcherFactory();
     self->km_normal = new_SimpleKeymap();
     /* TODO: add parameter: mode_indicator, eg. "/" */
     self->km_normal->op->set_name(self->km_normal, VSTR("normal"));
@@ -3518,6 +3671,9 @@ _puls_destroy(_self)
     self->aligner = NULL;   /* puls doesn't own the aligner */
     self->hl_chain = NULL;  /* points to one of the highlighters */
 
+    vim_free(self->filter_matcher_name);
+    vim_free(self->isearch_matcher_name);
+
     CLASS_DELETE(self->km_normal);
     CLASS_DELETE(self->km_filter);
     CLASS_DELETE(self->km_search);
@@ -3531,6 +3687,8 @@ _puls_destroy(_self)
     CLASS_DELETE(self->hl_menu);
     CLASS_DELETE(self->hl_isearch);
     CLASS_DELETE(self->hl_filter);
+    CLASS_DELETE(self->filter_matcher_factory)
+    CLASS_DELETE(self->isearch_matcher_factory)
     CLASS_DELETE(self->filter);
     CLASS_DELETE(self->isearch);
 
@@ -3611,6 +3769,7 @@ _puls_read_options(_self, options)
     option = dict_find(options, VSTR("highlight"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
     {
+	/* TODO: option: highlight-matcher; member: highlight_matcher_name */
 	if (! self->user_matcher)
 	    self->user_matcher = (TextMatcher_T*) new_TextMatcher();
 	self->user_matcher->op->set_search_str(self->user_matcher, option->di_tv.vval.v_string);
@@ -3817,8 +3976,6 @@ _puls_prepare_result(_self, result)
 	    list_append_tv(marked, &tv);
 	}
     }
-
-    /* TODO: fill the path for hierarchical list */
 
     if (self->model)
 	self->model->op->update_result(self->model, result);
@@ -4203,10 +4360,6 @@ _puls_on_filter_change(_self, data)
     self->need_redraw |= PULS_REDRAW_ALL;
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 
-    /* TODO: verify if using hl_filter->set_matcher(filter->matcher) in update_hl_chain is enough
-    if (self->hl_filter)
-	self->hl_filter->op->set_pattern(self->hl_filter, self->filter->text);
-     */
     return 1;
 }
 
@@ -4255,7 +4408,7 @@ _puls_do_isearch(_self, dir)
 		break;
 	    }
 	}
-	/* wrap around on isearch ... XXX: could make it optional */
+	/* wrap around on isearch */
 	end = start;
 	start = (dir > 0) ? 0 : item_count - 1;
     }
@@ -4275,32 +4428,9 @@ _puls_on_isearch_change(_self, data)
 {
     METHOD(PopupList, on_isearch_change);
     self->isearch->op->set_text(self->isearch, self->line_edit->text);
-    /* TODO: verify if using hl_isearch->set_matcher(isearch->matcher) in update_hl_chain is enough
-    if (self->hl_isearch)
-	self->hl_isearch->op->set_pattern(self->hl_isearch, self->isearch->text);
-    */
 
     self->op->do_isearch(self, 1);
     return 1;
-}
-
-/* TODO: create a real factory class. */
-/* TODO: the default matchers can be selected as options. */
-/* TODO: the current matchers are returned in state so that the caller can restore them on next call. */
-    static TextMatcher_T*
-_factory_next_matcher(current)
-    TextMatcher_T* current;
-{
-    if (! current)
-	return (TextMatcher_T*) new_TextMatcher();
-    if ((void*) current->op == (void*) &_vt_TextMatcher) /* typeof() check */
-	return (TextMatcher_T*) new_TextMatcherWords();
-    if ((void*) current->op == (void*) &_vt_TextMatcherWords)
-	return (TextMatcher_T*) new_TextMatcherCmdT();
-    if ((void*) current->op == (void*) &_vt_TextMatcherCmdT)
-	return (TextMatcher_T*) new_TextMatcher();
-
-    return (TextMatcher_T*) new_TextMatcher(); /* failsafe */
 }
 
     static int
@@ -4461,10 +4591,14 @@ _puls_do_command(_self, command)
     }
     else if (EQUALS(command, "isearch-next-matcher")) {
 	TextMatcher_T* matcher;
-	matcher = _factory_next_matcher(self->isearch->matcher);
+	char_u* newname = self->isearch_matcher_factory->op->next_matcher(
+		self->isearch_matcher_factory, self->isearch_matcher_name);
+	_str_assign(&self->isearch_matcher_name, newname);
+	matcher = self->isearch_matcher_factory->op->create_matcher(
+		self->isearch_matcher_factory, self->isearch_matcher_name);
 	if (matcher)
 	{
-	    self->isearch->op->set_matcher(self->isearch, matcher);
+	    self->isearch->op->set_matcher(self->isearch, matcher); /* deletes the old matcher */
 	    self->hl_isearch->op->set_matcher(self->hl_isearch, matcher);
 	    self->need_redraw |= PULS_REDRAW_ALL;
 	}
@@ -4472,10 +4606,14 @@ _puls_do_command(_self, command)
     }
     else if (EQUALS(command, "filter-next-matcher")) {
 	TextMatcher_T* matcher;
-	matcher = _factory_next_matcher(self->filter->matcher);
+	char_u* newname = self->filter_matcher_factory->op->next_matcher(
+		self->filter_matcher_factory, self->filter_matcher_name);
+	_str_assign(&self->filter_matcher_name, newname);
+	matcher = self->filter_matcher_factory->op->create_matcher(
+		self->filter_matcher_factory, self->filter_matcher_name);
 	if (matcher)
 	{
-	    self->filter->op->set_matcher(self->filter, matcher);
+	    self->filter->op->set_matcher(self->filter, matcher); /* deletes the old matcher */
 	    self->hl_filter->op->set_matcher(self->hl_filter, matcher);
 	    self->op->on_filter_change(self, NULL); /* to trigger filtering */
 	    self->need_redraw |= PULS_REDRAW_ALL;
@@ -4696,7 +4834,7 @@ _puls_process_command(_self, command)
 	    return PULS_LOOP_CONTINUE;
 
 	/* select_item(), cont:
-	 *	 0 - let the caller handle it
+	 *	 0 - let the popuplist() caller handle it
 	 *	 1 - remain in the event loop; update the items, they may have changed
 	 *	-1 - exit the loop; return the result 'done' (executed by the handler)
 	 */
@@ -4755,25 +4893,38 @@ _puls_test_loop(pplist, rettv)
     PopupList_T* pplist;
     typval_T*    rettv;
 {
-    char_u buf[32]; /* XXX: small, but remove from stack anyway */
-    SimpleKeymap_T *modemap;
-    ItemProvider_T *pmodel;
-    WindowBorder_T *pborder;
-    ItemFilter_T   *pfilter;
-
-#define MAX_KEY_SIZE	6*3+1		/* XXX: What is the longest sequence key_to_str can produce? */
+#define MAX_KEY_SIZE	6*3+1
 #define MAX_SEQ_LEN	8*MAX_KEY_SIZE
-    char_u sequence[MAX_SEQ_LEN];	/* current input sequence. XXX: remove from stack */
+#define BUF_LEN		32
+    char_u *sequence;	/* current input sequence. */
+    char_u* buf;	/* temp buffer */
     char_u *ps;
     char_u* command;
     int rv, seq_len, key, found, prev_found, hh, de;
     int avail, sleep_count;
     int ambig_timeout;
     CommandQueue_T* curcmds;
+    SimpleKeymap_T *modemap;
+    ItemProvider_T *pmodel;
+    WindowBorder_T *pborder;
+    ItemFilter_T   *pfilter;
+    ISearch_T      *psearch;
+
+    buf = (char_u*) alloc(BUF_LEN);
+    sequence = (char_u*) alloc(MAX_SEQ_LEN);
 
     pborder = pplist->border;
     pmodel = pplist->model;
     pfilter = pplist->filter;
+    psearch = pplist->isearch;
+
+    /* FIXME: create_matcher could return NULL and filtering will crash ! */
+    pfilter->op->set_matcher(pfilter,
+	    pplist->filter_matcher_factory->op->create_matcher(
+		pplist->filter_matcher_factory, pplist->filter_matcher_name));
+    psearch->op->set_matcher(psearch,
+	    pplist->isearch_matcher_factory->op->create_matcher(
+		pplist->isearch_matcher_factory, pplist->isearch_matcher_name));
 
     /* make sure the current item is displayed */
     pplist->op->set_current(pplist, pplist->current);
@@ -4804,10 +4955,10 @@ _puls_test_loop(pplist, rettv)
 	    char* pending;
 	    pending = (found & KM_PREFIX) ? (char*)sequence : NULL;
 	    if (nf == nt)
-		vim_snprintf((char*)buf, 32, "%d/%d%s%s", pplist->current + 1, nt,
+		vim_snprintf((char*)buf, BUF_LEN, "%d/%d%s%s", pplist->current + 1, nt,
 			pending ? " " : "", pending ? pending : "");
 	    else
-		vim_snprintf((char*)buf, 32, "%d/%d(%d)%s%s", pplist->current + 1, nf, nt,
+		vim_snprintf((char*)buf, BUF_LEN, "%d/%d(%d)%s%s", pplist->current + 1, nf, nt,
 			pending ? " " : "", pending ? pending : "");
 	    pborder->op->set_info(pborder, buf);
 	    if (pplist->need_redraw)
@@ -4946,6 +5097,8 @@ _puls_test_loop(pplist, rettv)
 		    ambig_timeout = (p_ttm < 0 ? p_tm : p_ttm);
 		    /* XXX: In console a timeout for <esc> is applied twice.
 		     * We should detect that vim already timed out on <esc>.
+		     * Eg. we could measure the time spent in safe_vgetc() and
+		     * subtract from ambig_timeout.
 		    if (*sequence == 0x1e && *(sequence+1) == NUL)
 		    {
 			ambig_timeout = 0;
@@ -5007,6 +5160,9 @@ _puls_test_loop(pplist, rettv)
 	    curcmds = NULL;
 	}
     }
+
+    vim_free(sequence);
+    vim_free(buf);
 
     /* TODO: consider that there could be multiple overlapping boxes */
     _forced_redraw();
@@ -5247,7 +5403,6 @@ puls_test(argvars, rettv)
     if (did_emsg)
 	rv = FAIL;
     else
-	/* process the list */
 	rv = _puls_test_loop(pplist, rettv);
 
     CLASS_DELETE(pplist);

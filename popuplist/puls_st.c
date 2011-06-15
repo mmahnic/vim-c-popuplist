@@ -28,8 +28,9 @@
 /* [ooc]
  *
   typedef void (*Destroy_Fn)(void* _self);
-
   typedef int (*ItemComparator_Fn)(void* _self, void* a, void* b);
+  typedef int (*ItemMatcher_Fn)(void* _self, void* item);
+
   // Comparator with double interface: either use fn_compare+extra or reimplement compare().
   class ItemComparator [icmprtr]
   {
@@ -37,10 +38,10 @@
     void* extra;      // optional extra data
     int   reverse;
     void  init();
+    void  destroy();
     int   compare(void* a, void* b);
   };
 
-  typedef int (*ItemMatcher_Fn)(void* _self, void* item);
   // Matcher with double interface: either use fn_match+extra or reimplement match().
   class ItemMatcher [imtchr]
   {
@@ -60,6 +61,14 @@ _icmprtr_init(_self)
     self->fn_compare = NULL;
     self->reverse = 0;
     self->extra = NULL;
+}
+
+    static void
+_icmprtr_destroy(_self)
+    void* _self;
+{
+    METHOD(ItemComparator, destroy);
+    END_DESTROY(ItemComparator);
 }
 
     static int

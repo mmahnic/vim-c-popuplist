@@ -646,3 +646,4 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
     if (col <= self->max_col && fillChar != NUL)
 	screen_fill(row, row + 1, col, self->max_col+1, fillChar, fillChar, init_attr);
 }
+
