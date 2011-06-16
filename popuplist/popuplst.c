@@ -1605,6 +1605,94 @@ _txm_get_match_at(_self, haystack)
 
 /* [ooc]
  *
+  class TextMatcherRegexp(TextMatcher) [txmrgxp]
+  {
+    regmatch_T _regmatch;
+
+    void    init();
+    void    destroy();
+    void    set_search_str(char_u* needle);
+    ulong   match(char_u* haystack);
+    void    init_highlight(char_u* haystack);
+    int     get_match_at(char_u* haystack);
+  };
+*/
+
+    static void
+_txmrgxp_init(_self)
+    void* _self;
+{
+    METHOD(TextMatcherRegexp, init);
+    self->mode_char = 'R'; /* regexp */
+    self->_regmatch.regprog = NULL;
+    self->_regmatch.rm_ic = 0;
+}
+
+    static void
+_txmrgxp_destroy(_self)
+    void* _self;
+{
+    METHOD(TextMatcherRegexp, destroy);
+    vim_free(self->_regmatch.regprog);
+    END_DESTROY(TextMatcherRegexp);
+}
+
+    static void
+_txmrgxp_set_search_str(_self, needle)
+    void* _self;
+    char_u* needle;
+{
+    METHOD(TextMatcherRegexp, set_search_str);
+    vim_free(self->_regmatch.regprog);
+    self->_regmatch.regprog = NULL;
+
+    super(TextMatcherRegexp, set_search_str)(self, needle);
+    if (! self->_needle || ! self->_need_strlen)
+	return;
+
+    self->_regmatch.regprog = vim_regcomp(self->_needle, (p_magic ? RE_MAGIC : 0) | RE_STRING );
+}
+
+    static ulong
+_txmrgxp_match(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherRegexp, match);
+    int bfound;
+    if (! self->_regmatch.regprog)
+	return 1; /* no (valid) program => everything matches */
+
+    bfound = vim_regexec(&self->_regmatch, haystack, 0);
+    return bfound;
+}
+
+    static void
+_txmrgxp_init_highlight(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherRegexp, init_highlight);
+    if (! self->_regmatch.regprog)
+	return;
+
+    /* the possible match will be stored in _regmatch and used in get_match_at */
+    vim_regexec(&self->_regmatch, haystack, 0);
+}
+
+    static int
+_txmrgxp_get_match_at(_self, haystack)
+    void* _self;
+    char_u* haystack;
+{
+    METHOD(TextMatcherRegexp, get_match_at);
+    /* TODO: TextMatcherRegexp : return info for the highlighter */
+    return 0;
+}
+
+
+/* [ooc]
+ *
   const TMWME_MAX_WORDS = 16;
   struct TmWordMatchExpr [tmwmxpr]
   {
@@ -2271,6 +2359,10 @@ _txmfac_init(_self)
 
     pme = new_TextMatcherFactoryEntry();
     pme->op->set(pme, VSTR("words"), (NewObject_Fn) &new_TextMatcherWords);
+    self->_lst_entries->op->add_tail(self->_lst_entries, pme);
+
+    pme = new_TextMatcherFactoryEntry();
+    pme->op->set(pme, VSTR("regexp"), (NewObject_Fn) &new_TextMatcherRegexp);
     self->_lst_entries->op->add_tail(self->_lst_entries, pme);
 
     pme = new_TextMatcherFactoryEntry();
@@ -4452,24 +4544,8 @@ _puls_on_filter_change(_self, data)
     self->filter->op->set_text(self->filter, self->line_edit->text);
 
     icur = self->op->refilter(self, icur, 0);
-    if (icur < 0)
-	icur = 0;
     self->op->set_current(self, icur);
 
-#if 0
-    self->filter->op->filter_items(self->filter);
-    if (icur < 0)
-	self->op->set_current(self, 0);
-    else
-    {
-	item_count = self->filter->op->get_item_count(self->filter);
-	if (item_count <= self->filter->op->get_item_count(self->filter))
-	    icur = self->filter->op->get_index_of(self->filter, icur);
-	else 
-	    icur = 0;
-	self->op->set_current(self, icur);
-    }
-#endif
     self->need_redraw |= PULS_REDRAW_ALL;
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 
