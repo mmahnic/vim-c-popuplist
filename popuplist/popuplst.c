@@ -25,6 +25,7 @@
  */
 
 /*                 WORK IN PROGRESS                   */
+/*  FIXME: Vim will crash on out-of-memory            */
 
 #include "vim.h"
 
@@ -52,6 +53,34 @@ static dictitem_T dumdi;
 extern int call_func __ARGS((char_u *funcname, int len, typval_T *rettv, int argcount, typval_T *argvars, linenr_T firstline, linenr_T lastline, int *doesrange, int evaluate, dict_T *selfdict));
 extern void dict_unref __ARGS((dict_T *d));
 extern void dictitem_remove __ARGS((dict_T *dict, dictitem_T *item));
+
+/*
+ * Add a dict entry to dictionary "d".
+ * Returns FAIL when out of memory and when key already exists.
+ * ( based on dict_add_list )
+ */
+    static int
+_dict_add_dict(d, key, dict)
+    dict_T	*d;
+    char	*key;
+    dict_T	*dict;
+{
+    dictitem_T	*item;
+
+    item = dictitem_alloc((char_u *)key);
+    if (item == NULL)
+	return FAIL;
+    item->di_tv.v_lock = 0;
+    item->di_tv.v_type = VAR_DICT;
+    item->di_tv.vval.v_dict = dict;
+    if (dict_add(d, item) == FAIL)
+    {
+	dictitem_free(item);
+	return FAIL;
+    }
+    ++dict->dv_refcount;
+    return OK;
+}
 
 /* Some constants */
 static char_u blankline[] = "";
@@ -2278,9 +2307,6 @@ _txmfac_create_matcher(_self, name)
     return NULL;
 }
 
-/* TODO: the default matchers can be selected as options.
- * filter-matcher, isearch-matcher, highlight-matcher
- * Maybe add a list of valid matchers for filter and isearch. */
 /* TODO: the current matchers are returned in state so that the caller can restore them on next call. */
     static char_u*
 _txmfac_next_matcher(_self, name)
@@ -3593,10 +3619,12 @@ _wbor_draw_item_right(_self, line, current)
     void    reposition();
     void    update_hl_chain();
     void    redraw();
+    int	    refilter(int track_item, int always_track);
     void    move_cursor();
     int	    do_command(char_u* command);
     void    switch_mode(char_u* modename);
     void    prepare_result(dict_T* result);
+    void    save_state(dict_T* result);
     void    set_title(char_u* title);
     void    set_current(int index);
     int	    do_isearch(int dir); // perfrom isearch with the current isearch settings; @param dir=+-1
@@ -3636,7 +3664,7 @@ _puls_init(_self)
     self->km_filter = new_SimpleKeymap();
     self->km_filter->op->set_name(self->km_filter, VSTR("filter"));
     self->km_search = new_SimpleKeymap();
-    self->km_search->op->set_name(self->km_search, VSTR("search"));
+    self->km_search->op->set_name(self->km_search, VSTR("isearch"));
     self->km_shortcut = new_SimpleKeymap();
     self->km_shortcut->op->set_name(self->km_shortcut, VSTR("shortcut"));
     self->modemap = self->km_normal;
@@ -3687,10 +3715,10 @@ _puls_destroy(_self)
     CLASS_DELETE(self->hl_menu);
     CLASS_DELETE(self->hl_isearch);
     CLASS_DELETE(self->hl_filter);
-    CLASS_DELETE(self->filter_matcher_factory)
-    CLASS_DELETE(self->isearch_matcher_factory)
     CLASS_DELETE(self->filter);
     CLASS_DELETE(self->isearch);
+    CLASS_DELETE(self->filter_matcher_factory)
+    CLASS_DELETE(self->isearch_matcher_factory)
 
     END_DESTROY(PopupList);
 }
@@ -3766,19 +3794,59 @@ _puls_read_options(_self, options)
 	self->op->switch_mode(self, option->di_tv.vval.v_string);
     }
 
-    option = dict_find(options, VSTR("highlight"), -1L);
-    if (option && option->di_tv.v_type == VAR_STRING)
+    option = dict_find(options, VSTR("isearch_matcher"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
     {
-	/* TODO: option: highlight-matcher; member: highlight_matcher_name */
+	_str_assign(&self->isearch_matcher_name, option->di_tv.vval.v_string);
+    }
+
+    option = dict_find(options, VSTR("filter_matcher"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
+	_str_assign(&self->filter_matcher_name, option->di_tv.vval.v_string);
+    }
+
+    option = dict_find(options, VSTR("highlight_matcher"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
+	TextMatcher_T* matcher;
+	matcher = self->isearch_matcher_factory->op->create_matcher(
+		self->isearch_matcher_factory, option->di_tv.vval.v_string);
+	if (matcher)
+	{
+	    vim_free(self->user_matcher);
+	    self->user_matcher = matcher;
+	}
+    }
+
+    option = dict_find(options, VSTR("isearch"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
+	if (self->isearch)
+	    self->isearch->op->set_text(self->isearch, option->di_tv.vval.v_string);
+    }
+
+    option = dict_find(options, VSTR("filter"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
+	if (self->filter)
+	    self->filter->op->set_text(self->filter, option->di_tv.vval.v_string);
+    }
+
+    option = dict_find(options, VSTR("highlight"), -1L);
+    if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
+    {
 	if (! self->user_matcher)
 	    self->user_matcher = (TextMatcher_T*) new_TextMatcher();
-	self->user_matcher->op->set_search_str(self->user_matcher, option->di_tv.vval.v_string);
+	if (self->user_matcher)
+	    self->user_matcher->op->set_search_str(self->user_matcher, option->di_tv.vval.v_string);
 	if (! self->hl_user)
-	{
 	    self->hl_user = new_TextMatchHighlighter();
+	if (self->hl_user)
+	{
 	    self->hl_user->matcher = self->user_matcher;
+	    self->hl_user->match_attr = _puls_hl_attrs[PULSATTR_HL_USER].attr;
 	}
-	self->hl_user->match_attr = _puls_hl_attrs[PULSATTR_HL_USER].attr;
     }
 
     option = dict_find(options, VSTR("current"), -1L);
@@ -3834,7 +3902,7 @@ _puls_default_keymap(_self)
     modemap->op->set_key(modemap, VSTR("m"), VSTR("toggle-marked|next-item"));
     modemap->op->set_key(modemap, VSTR("f"), VSTR("modeswitch:filter"));
     modemap->op->set_key(modemap, VSTR("%"), VSTR("modeswitch:filter"));
-    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:search"));
+    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:isearch"));
     modemap->op->set_key(modemap, VSTR("&"), VSTR("modeswitch:shortcut"));
     modemap->op->set_vim_key(modemap, VSTR("<c-n>"), VSTR("isearch-next"));
     modemap->op->set_vim_key(modemap, VSTR("<c-p>"), VSTR("isearch-prev"));
@@ -3898,7 +3966,7 @@ _puls_default_keymap(_self)
     modemap = self->km_shortcut;
     modemap->mode_char = '&';
     modemap->op->set_key(modemap, VSTR("%"), VSTR("modeswitch:filter"));
-    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:search"));
+    modemap->op->set_key(modemap, VSTR("/"), VSTR("modeswitch:isearch"));
     modemap->op->set_key(modemap, VSTR("&"), VSTR("modeswitch:normal"));
     modemap->op->set_vim_key(modemap, VSTR("<tab>"), VSTR("next-item"));
     modemap->op->set_vim_key(modemap, VSTR("<s-tab>"), VSTR("prev-item"));
@@ -3979,6 +4047,21 @@ _puls_prepare_result(_self, result)
 
     if (self->model)
 	self->model->op->update_result(self->model, result);
+}
+
+/* Save various information about the state of the puls
+ * except current and marked. */
+    static void
+_puls_save_state(_self, result)
+    void* _self;
+    dict_T* result;
+{
+    METHOD(PopupList, save_state);
+
+    dict_T  *d = dict_alloc();
+    dict_add_nr_str(d, "isearch_matcher", 0, self->isearch_matcher_name);
+    dict_add_nr_str(d, "filter_matcher", 0, self->filter_matcher_name);
+    _dict_add_dict(result, "state", d);
 }
 
     static int
@@ -4332,31 +4415,61 @@ _puls_set_current(_self, index)
 }
 
     static int
+_puls_refilter(_self, track_item, always_track)
+    void* _self;
+    int track_item;
+    int always_track;
+{
+    METHOD(PopupList, refilter);
+    int item_count;
+
+    item_count = self->filter->op->get_item_count(self->filter);
+    self->filter->op->filter_items(self->filter);
+
+    /* Track the position of the current item and try to find it in the
+     * filtered list.  When always_track is 0, tracking is done only when the
+     * number of matching items grows. */
+    if (track_item >= 0)
+    {
+	if (always_track || item_count <= self->filter->op->get_item_count(self->filter))
+	    track_item = self->filter->op->get_index_of(self->filter, track_item);
+	else 
+	    track_item = 0;
+    }
+    return track_item;
+}
+
+    static int
 _puls_on_filter_change(_self, data)
     void* _self;
     void* data;
 {
     METHOD(PopupList, on_filter_change);
-    int icur, item_count;
+    int icur;
 
-    /* remember the index of the current item and try to find it in the filtered list
-     * when the number of matching items grows */
     icur = self->filter->op->get_model_index(self->filter, self->current);
-    if (icur >= 0)
-	item_count = self->filter->op->get_item_count(self->filter);
 
     self->filter->op->set_text(self->filter, self->line_edit->text);
+
+    icur = self->op->refilter(self, icur, 0);
+    if (icur < 0)
+	icur = 0;
+    self->op->set_current(self, icur);
+
+#if 0
     self->filter->op->filter_items(self->filter);
     if (icur < 0)
 	self->op->set_current(self, 0);
     else
     {
+	item_count = self->filter->op->get_item_count(self->filter);
 	if (item_count <= self->filter->op->get_item_count(self->filter))
 	    icur = self->filter->op->get_index_of(self->filter, icur);
 	else 
 	    icur = 0;
 	self->op->set_current(self, icur);
     }
+#endif
     self->need_redraw |= PULS_REDRAW_ALL;
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 
@@ -4926,6 +5039,9 @@ _puls_test_loop(pplist, rettv)
 	    pplist->isearch_matcher_factory->op->create_matcher(
 		pplist->isearch_matcher_factory, pplist->isearch_matcher_name));
 
+    if (pfilter->op->is_active(pfilter))
+	pplist->current = pplist->op->refilter(pplist, pplist->current, 1);
+
     /* make sure the current item is displayed */
     pplist->op->set_current(pplist, pplist->current);
     hh = pplist->position.height / 2;
@@ -5194,9 +5310,15 @@ _puls_test_loop(pplist, rettv)
 	    dict_add_nr_str(d, "mode", 0, pplist->modemap->name);
 
 	if (EQUALS(command, "accept") || STARTSWITH(command, "accept:"))
+	{
 	    pplist->op->prepare_result(pplist, d);
-	else
+	    pplist->op->save_state(pplist, d);
+	}
+	else if (STARTSWITH(command, "done:"))
+	{
 	    dict_add_nr_str(d, "current", pplist->current, NULL);
+	    pplist->op->save_state(pplist, d);
+	}
     }
 
     return rv;
