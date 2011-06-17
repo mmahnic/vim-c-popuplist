@@ -1608,6 +1608,7 @@ _txm_get_match_at(_self, haystack)
   class TextMatcherRegexp(TextMatcher) [txmrgxp]
   {
     regmatch_T _regmatch;
+    int	       found;
 
     void    init();
     void    destroy();
@@ -1651,6 +1652,7 @@ _txmrgxp_set_search_str(_self, needle)
 	return;
 
     self->_regmatch.regprog = vim_regcomp(self->_needle, (p_magic ? RE_MAGIC : 0) | RE_STRING );
+    self->_regmatch.rm_ic = FALSE;
 }
 
     static ulong
@@ -1659,12 +1661,11 @@ _txmrgxp_match(_self, haystack)
     char_u* haystack;
 {
     METHOD(TextMatcherRegexp, match);
-    int bfound;
     if (! self->_regmatch.regprog)
 	return 1; /* no (valid) program => everything matches */
 
-    bfound = vim_regexec(&self->_regmatch, haystack, 0);
-    return bfound;
+    self->found = vim_regexec(&self->_regmatch, haystack, 0);
+    return self->found;
 }
 
     static void
@@ -1674,10 +1675,13 @@ _txmrgxp_init_highlight(_self, haystack)
 {
     METHOD(TextMatcherRegexp, init_highlight);
     if (! self->_regmatch.regprog)
+    {
+	self->found = FALSE;
 	return;
+    }
 
     /* the possible match will be stored in _regmatch and used in get_match_at */
-    vim_regexec(&self->_regmatch, haystack, 0);
+    self->found = vim_regexec(&self->_regmatch, haystack, 0);
 }
 
     static int
@@ -1686,8 +1690,20 @@ _txmrgxp_get_match_at(_self, haystack)
     char_u* haystack;
 {
     METHOD(TextMatcherRegexp, get_match_at);
-    /* TODO: TextMatcherRegexp : return info for the highlighter */
-    return 0;
+    if (!self->_regmatch.regprog || !self->found)
+	return 0;
+
+    if (haystack >= self->_regmatch.endp[0])
+    {
+	self->op->init_highlight(self, haystack);
+	if (!self->_regmatch.regprog || !self->found)
+	    return 0;
+    }
+
+    if (haystack < self->_regmatch.startp[0])
+	return 0;
+
+    return self->_regmatch.endp[0] - haystack;
 }
 
 
