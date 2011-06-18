@@ -1308,12 +1308,16 @@ _vlprov_get_display_text(_self, item)
 }
 
 
-#ifdef FEAT_POPUPLIST_BUFFERS
+#if defined(FEAT_POPUPLIST_BUFFERS)
 #include "puls_pb.c"
 #endif
 
 #if defined(FEAT_POPUPLIST_MENUS)
 #include "puls_pm.c"
+#endif
+
+#if defined(FEAT_QUICKFIX)
+#include "puls_pq.c"
 #endif
 
 /* [ooc]
@@ -1626,7 +1630,7 @@ _txmrgxp_init(_self)
     METHOD(TextMatcherRegexp, init);
     self->mode_char = 'R'; /* regexp */
     self->_regmatch.regprog = NULL;
-    self->_regmatch.rm_ic = 0;
+    self->_regmatch.rm_ic = FALSE;
 }
 
     static void
@@ -1651,8 +1655,12 @@ _txmrgxp_set_search_str(_self, needle)
     if (! self->_needle || ! self->_need_strlen)
 	return;
 
+    /* TODO: (eventualy) a user can define a hook to transform _needle into a vim regex */
+
+    ++emsg_skip;
     self->_regmatch.regprog = vim_regcomp(self->_needle, (p_magic ? RE_MAGIC : 0) | RE_STRING );
-    self->_regmatch.rm_ic = FALSE;
+    --emsg_skip;
+    self->_regmatch.rm_ic = p_ic;
 }
 
     static ulong
@@ -1665,6 +1673,7 @@ _txmrgxp_match(_self, haystack)
 	return 1; /* no (valid) program => everything matches */
 
     self->found = vim_regexec(&self->_regmatch, haystack, 0);
+
     return self->found;
 }
 
@@ -1680,7 +1689,7 @@ _txmrgxp_init_highlight(_self, haystack)
 	return;
     }
 
-    /* the possible match will be stored in _regmatch and used in get_match_at */
+    /* the first match is stored in _regmatch and used in get_match_at */
     self->found = vim_regexec(&self->_regmatch, haystack, 0);
 }
 
@@ -1695,6 +1704,7 @@ _txmrgxp_get_match_at(_self, haystack)
 
     if (haystack >= self->_regmatch.endp[0])
     {
+	/* find next match */
 	self->op->init_highlight(self, haystack);
 	if (!self->_regmatch.regprog || !self->found)
 	    return 0;
@@ -5472,6 +5482,7 @@ puls_test(argvars, rettv)
     dict_T* options = NULL;
     int rv;
     int default_split_columns = 0;
+    int default_current = -1;
 
     /*_init_vtables();*/
     _update_hl_attrs();
@@ -5540,6 +5551,17 @@ puls_test(argvars, rettv)
 	    default_split_columns = 1;
 	}
 #endif
+#ifdef FEAT_QUICKFIX
+	if (EQUALS(special_items, "quickfix"))
+	{
+	    LOG(("Quick Fix"));
+	    QuickfixItemProvider_T* qmodel = new_QuickfixItemProvider();
+	    /* TODO: select location list or global error list, depending on the title */
+	    qmodel->qfinfo = &ql_info;
+	    default_current = qmodel->op->list_items(qmodel);
+	    model = (ItemProvider_T*) qmodel;
+	}
+#endif
 #if defined(INCLUDE_TESTS)
 	if (EQUALS(special_items, str_pulstest))
 	{
@@ -5594,6 +5616,7 @@ puls_test(argvars, rettv)
     /* TODO: column_split should be set with a call to the provider */
     /*       eg. model->op->prepare_popuplist(model, pplist) */
     pplist->column_split = default_split_columns;
+    pplist->current = default_current;
 
     if (options)
     {
