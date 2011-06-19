@@ -293,6 +293,7 @@ _update_hl_attrs()
  *  DONE: buffer list
  *     - TODO: handle marked buffers
  *  DONE: menu tree
+ *  DONE: quickfix
  *  DONE in vimuiex: filesystem tree
  *  DONE in vimuiex: filesystem flat view (files in subdirs)
  *  WONT DO: list of C strings
@@ -322,8 +323,17 @@ _update_hl_attrs()
  *	int exec_action(char_u* action, int current)
  *
  *  DONE: The items in the list can be marked.
+ *	XXX: do we want to have marked items that are currently hidden by the filter?
+ *
+ *  TODO: display and manage multiple listboxes
+ *  TODO: attach a listbox to a Vim window (puls as a special buffer)
+ *	- exit the puls main loop immediately but keep the listbox when another
+ *	  window is activated
+ *	- enter the puls main loop when the window is activated
+ *	- add a pointer to the attached puls to the window structure
+ *	- render the listbox on window update
+ *	- ?? display the puls entry in :ls
  * 
- *  TODO: do we want to have marked items that are currently hidden by the filter?
  */
 
 /* [ooc]
@@ -5552,12 +5562,36 @@ puls_test(argvars, rettv)
 	}
 #endif
 #ifdef FEAT_QUICKFIX
-	if (EQUALS(special_items, "quickfix"))
+	if (EQUALS(special_items, "quickfix") || EQUALS(special_items, "copen"))
 	{
-	    LOG(("Quick Fix"));
+	    LOG(("Quick Fix - %s", special_items));
+	    if (EQUALS(special_items, "copen"))
+	    {
+		if (ql_info.qf_listcount < 1)
+		{
+		    /* TODO: errmsg: no error list */
+		    return FAIL;
+		}
+	    }
 	    QuickfixItemProvider_T* qmodel = new_QuickfixItemProvider();
-	    /* TODO: select location list or global error list, depending on the title */
 	    qmodel->qfinfo = &ql_info;
+	    default_current = qmodel->op->list_items(qmodel);
+	    model = (ItemProvider_T*) qmodel;
+	}
+	else if (EQUALS(special_items, "lopen"))
+	{
+	    LOG(("Quick Fix - lopen"));
+	    QuickfixItemProvider_T* qmodel = new_QuickfixItemProvider();
+	    if (curwin->w_llist_ref)
+		qmodel->qfinfo = curwin->w_llist_ref;
+	    else if (curwin->w_llist)
+		qmodel->qfinfo = curwin->w_llist;
+	    else
+	    {
+		CLASS_DELETE(qmodel);
+		/* TODO: errmsg: no location list associated with the current window */
+		return FAIL;
+	    }
 	    default_current = qmodel->op->list_items(qmodel);
 	    model = (ItemProvider_T*) qmodel;
 	}
