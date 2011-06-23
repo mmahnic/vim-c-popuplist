@@ -32,6 +32,7 @@
     vimmenu_T*  top_menu;  // the initial menu to be displayed; gui_find_menu
     vimmenu_T*  cur_menu;  // the currently displayed menu
     int		mode;      // the mode where the menu is executed (one of MODE_INDEX_*)
+    int		flat_view; // show items from all submenus
     void	init();
     void	destroy();
     // find the root menu to display
@@ -39,10 +40,12 @@
     void	update_title();
     int		parse_mode(char_u* command);
     int		list_items(void* selected);
+    int		_list_items_r(vimmenu_T* menu, void* selected, int* count, int level);
     int		select_item(int item);
     int		select_parent();
     // void	read_options(dict_T* options);
-    // void	default_keymap(PopupList* puls);
+    void	default_keymap(PopupList* puls);
+    char_u*	handle_command(PopupList* puls, char_u* command);
   };
 */
 
@@ -56,6 +59,8 @@ _mnupr_init(_self)
     self->top_menu = root_menu;
     self->cur_menu = self->top_menu;
     self->mode = MENU_INDEX_NORMAL;
+    self->flat_view = 0;
+    self->has_title_items = 0;
     self->has_shortcuts = 1;
 }
 
@@ -151,55 +156,139 @@ _mnupr_parse_mode(_self, command)
 }
 
     static int
+_mnupr__list_items_r(_self, menu, selected, count, level)
+    void* _self;
+    vimmenu_T* menu;
+    void* selected;
+    int*  count;
+    int   level;
+{
+    METHOD(MenuItemProvider, _list_items_r);
+    vimmenu_T   *pm, *ppar;
+    vimmenu_T** parents;
+    PopupItem_T* pit;
+    int len, d, isel, is_submenu;
+    int loops, iloop, item_types; // 0x01-normal, 0x02-submenu, 0x04-disabled
+    int mode_flag = (1 << self->mode);
+    static char submenu_icon = '+';
+
+    if (self->flat_view)
+    {
+	loops = 2;
+	item_types = 0x01;
+	parents = (vimmenu_T**) alloc(sizeof(vimmenu_T*) * 10); // max supported menu depth
+    }
+    else
+    {
+	loops = 1;
+	item_types = 0x07;
+	parents = NULL;
+    }
+
+    isel = -1;
+    for (iloop = 0; iloop < loops; ++iloop)
+    {
+	if (iloop == 1)
+	    item_types = 0x02;
+	for (pm = menu; pm != NULL; pm = pm->next)
+	{
+	    /* menu_is_hidden is static; the condition ']' is copied from there */
+	    if (!pm->dname || *pm->dname == ']' || menu_is_popup(pm->dname)  || menu_is_toolbar(pm->dname))
+		continue;
+	    if (menu_is_separator(pm->dname))
+	    {
+		if (!(item_types & 0x04))
+		    continue;
+		pit = self->op->append_pchar_item(self, g_separator, ITEM_SHARED);
+		if (pit)
+		    pit->flags |= ITEM_SEPARATOR;
+	    }
+	    else
+	    {
+		is_submenu = (pm->children != NULL);
+		if (!is_submenu && !(item_types & 0x01))
+		    continue;
+		if (is_submenu && !(item_types & 0x02))
+		    continue;
+
+		if (!self->flat_view)
+		    len = vim_snprintf((char *)IObuff, IOSIZE, "%c %s",
+			    is_submenu ? submenu_icon : ' ', pm->name);
+		else
+		{
+		    if (is_submenu && level > 0)
+		    {
+			len = vim_snprintf((char *)IObuff, IOSIZE, "%c ",
+				is_submenu ? submenu_icon : ' ');
+			d = level;
+			if (d > 9)
+			{
+			    d = 9;
+			    len += vim_snprintf((char *)(IObuff + len), IOSIZE - len, "...");
+			}
+			parents[d] = pm;
+			ppar = pm->parent;
+			while (ppar && d > 0)
+			{
+			    --d;
+			    parents[d] = ppar;
+			    ppar = ppar->parent;
+			}
+			while (d <= level)
+			{
+			    len += vim_snprintf((char *)(IObuff + len), IOSIZE - len, "%s%s",
+				    parents[d]->dname, (d == level) ? "" : ".");
+			    ++d;
+			}
+		    }
+		    else
+		    {
+			len = vim_snprintf((char *)IObuff, IOSIZE, "%c %s",
+				is_submenu ? submenu_icon : ' ',
+				pm->dname);
+		    }
+		}
+		pit = self->op->append_pchar_item(self, vim_strsave(IObuff), !ITEM_SHARED);
+		if (pit)
+		{
+		    pit->data = (void*)pm;
+		    if (!(pm->modes & mode_flag) || !(pm->enabled & mode_flag))
+		    {
+			pit->flags |= ITEM_DISABLED;
+		    }
+
+		    if (self->flat_view && pm->children)
+			pit->flags |= ITEM_TITLE;
+
+		    if (pm == selected && isel < 0)
+			isel = *count;
+		    ++(*count);
+		}
+		if (self->flat_view && pm->children)
+		{
+		    int subsel = self->op->_list_items_r(self, pm->children, selected, count, level+1);
+		    if (isel < 0)
+			isel = subsel;
+		}
+	    }
+	}
+    }
+
+    vim_free(parents);
+    return isel;
+}
+
+    static int
 _mnupr_list_items(_self, selected)
     void* _self;
     void* selected;
 {
     METHOD(MenuItemProvider, list_items);
-    vimmenu_T* pm;
-    PopupItem_T* pit;
-    int len, isel, i;
-    int mode_flag = (1 << self->mode);
+    int isel, count, level;
     self->op->clear_items(self);
-
-    /*LOG(("Menu s:%04x m:%04x re:%c %s", State, mode, restart_edit & 0xff, self->cur_menu->name));*/
-
-    isel = -1;
-    i = 0;
-    for (pm = self->cur_menu; pm != NULL; pm = pm->next)
-    {
-	/* menu_is_hidden is static; the condition ']' is copied from there */
-	if (!pm->dname || *pm->dname == ']' || menu_is_popup(pm->dname)  || menu_is_toolbar(pm->dname))
-	    continue;
-	if (menu_is_separator(pm->dname))
-	{
-	    pit = self->op->append_pchar_item(self, g_separator, ITEM_SHARED);
-	    if (pit)
-		pit->flags |= ITEM_SEPARATOR;
-	}
-	else
-	{
-	    /* TODO: Various Popup menus should be skipped. */
-	    len = vim_snprintf((char *)IObuff, IOSIZE - 20, "%c %s\t%s",
-		    pm->children ? '+' : ' ', /* TODO: submenu-icon setting */
-		    pm->name,
-		    pm->actext ? (char*)pm->actext : "");
-	    pit = self->op->append_pchar_item(self, vim_strsave(IObuff), !ITEM_SHARED);
-	    if (pit)
-	    {
-		pit->data = (void*)pm;
-		if (!(pm->modes & mode_flag) || !(pm->enabled & mode_flag))
-		{
-		    pit->flags |= ITEM_DISABLED;
-		}
-
-		if (pm == selected && isel < 0)
-		    isel = i;
-		++i;
-	    }
-	}
-    }
-
+    count = 0;
+    level = 0;
+    isel = self->op->_list_items_r(self, self->cur_menu, selected, &count, level);
     return isel;
 }
 
@@ -228,7 +317,7 @@ _mnupr_select_item(_self, item)
 	self->cur_menu = pm->children;
 	self->op->update_title(self);
 	self->op->list_items(self, NULL);
-	return 1;
+	return 2;
     }
     else
     {
@@ -276,3 +365,41 @@ _mnupr_select_parent(_self)
     return icur;
 }
 
+    static char_u*
+_mnupr_handle_command(_self, puls, command)
+    void*	    _self;
+    PopupList_T*    puls;
+    char_u*	    command;
+{
+    METHOD(MenuItemProvider, handle_command);
+    if (EQUALS(command, "menu-toggle-flat-view"))
+    {
+	self->flat_view = !self->flat_view;
+	self->has_title_items = self->flat_view;
+	self->has_shortcuts = !self->flat_view;
+	self->op->update_title(self);
+	self->op->list_items(self, NULL);
+	puls->need_redraw |= PULS_REDRAW_ALL;
+    }
+    else
+    {
+	return super(BufferItemProvider, handle_command)(self, puls, command);
+    }
+
+    return NULL;
+}
+
+    static void
+_mnupr_default_keymap(_self, puls)
+    void* _self;
+    PopupList_T* puls;
+{
+    METHOD(MenuItemProvider, default_keymap);
+    SimpleKeymap_T* modemap;
+
+    /* TODO: next mode depens on self->flat_view */
+    modemap = puls->km_normal;
+    modemap->op->set_key(modemap, VSTR("*"), VSTR("menu-toggle-flat-view|auto-resize|modeswitch:filter"));
+    modemap = puls->km_shortcut;
+    modemap->op->set_key(modemap, VSTR("*"), VSTR("menu-toggle-flat-view|auto-resize|modeswitch:filter"));
+}

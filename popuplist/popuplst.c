@@ -4780,7 +4780,7 @@ _puls_do_command(_self, command)
     }
     else if (EQUALS(command, "auto-resize")) {
 	self->op->reposition(self);
-	self->need_redraw |= PULS_REDRAW_ALL;
+	self->need_redraw |= PULS_REDRAW_CLEAR;
 	return 1;
     }
     else if (EQUALS(command, "input-bs")) {
@@ -5060,22 +5060,28 @@ _puls_process_command(_self, command)
 
 	/* select_item(), cont:
 	 *	 0 - let the popuplist() caller handle it
-	 *	 1 - remain in the event loop; update the items, they may have changed
 	 *	-1 - exit the loop; return the result 'done' (executed by the handler)
+	 *	 1 - remain in the event loop; update the items, they may have changed
+	 *	 2 - same as 1 & clear the filter
 	 */
 	cont = pmodel->op->select_item(pmodel, idx_model);
 	if (cont == 0)
 	    return PULS_LOOP_BREAK;
-	else if (cont == 1)
-	{
-	    self->need_redraw |= PULS_REDRAW_ALL | PULS_REDRAW_RESIZE;
-	    self->op->set_current(self, 0);
-	    return PULS_LOOP_CONTINUE;
-	}
-	else
+	else if (cont < 0)
 	{
 	    /* TODO: change command to "done" */
 	    return PULS_LOOP_BREAK;
+	}
+	else
+	{
+	    if (cont & 2)
+	    {
+		self->filter->op->set_text(self->filter, VSTR(""));
+		self->line_edit->op->set_text(self->line_edit, VSTR(""));
+	    }
+	    self->need_redraw |= PULS_REDRAW_ALL | PULS_REDRAW_RESIZE;
+	    self->op->set_current(self, 0);
+	    return PULS_LOOP_CONTINUE;
 	}
     }
     else if (STARTSWITH(command, "accept:"))
