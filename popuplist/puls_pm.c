@@ -34,7 +34,7 @@
     int		mode;      // the mode where the menu is executed (one of MODE_INDEX_*)
     int		flat_view; // show items from all submenus
     void	init();
-    void	destroy();
+    // void	destroy();
     // find the root menu to display
     void	find_menu(char_u* menu_path);
     void	update_title();
@@ -54,30 +54,23 @@ static char_u g_separator[] = "-";
     static void
 _mnupr_init(_self)
     void* _self;
-{
     METHOD(MenuItemProvider, init);
+{
     self->top_menu = root_menu;
     self->cur_menu = self->top_menu;
     self->mode = MENU_INDEX_NORMAL;
     self->flat_view = 0;
     self->has_title_items = 0;
     self->has_shortcuts = 1;
-}
-
-    static void
-_mnupr_destroy(_self)
-    void* _self;
-{
-    METHOD(MenuItemProvider, destroy);
-    END_DESTROY(MenuItemProvider);
+    END_METHOD;
 }
 
     static void
 _mnupr_find_menu(_self, menu_path)
     void*   _self;
     char_u* menu_path;
-{
     METHOD(MenuItemProvider, find_menu);
+{
     vimmenu_T* pm;
 
     if (!menu_path || !*menu_path)
@@ -94,13 +87,14 @@ _mnupr_find_menu(_self, menu_path)
     self->top_menu = pm;
     self->cur_menu = self->top_menu;
     self->op->update_title(self);
+    END_METHOD;
 }
 
     static void
 _mnupr_update_title(_self)
     void*   _self;
-{
     METHOD(MenuItemProvider, update_title);
+{
     char_u* title;
     if (self->cur_menu == root_menu || !self->cur_menu->parent || self->cur_menu->parent == root_menu)
 	self->op->set_title(self, VSTR("Menu"));
@@ -111,14 +105,15 @@ _mnupr_update_title(_self)
 	    ++title;
 	self->op->set_title(self, title);
     }
+    END_METHOD;
 }
 
     static int
 _mnupr_parse_mode(_self, command)
     void* _self;
     char_u* command;
-{
     METHOD(MenuItemProvider, parse_mode);
+{
     if (EQUALS(command, "menu"))
     {
 	self->mode = MENU_INDEX_NORMAL;
@@ -153,6 +148,7 @@ _mnupr_parse_mode(_self, command)
 	    return 1;
     }
     return 0;
+    END_METHOD;
 }
 
     static int
@@ -162,13 +158,13 @@ _mnupr__list_items_r(_self, menu, selected, count, level)
     void* selected;
     int*  count;
     int   level;
-{
     METHOD(MenuItemProvider, _list_items_r);
+{
     vimmenu_T   *pm, *ppar;
     vimmenu_T** parents;
     PopupItem_T* pit;
     int len, d, isel, is_submenu;
-    int loops, iloop, item_types; // 0x01-normal, 0x02-submenu, 0x04-disabled
+    int loops, iloop, item_types; /* 0x01-normal, 0x02-submenu, 0x04-disabled */
     int mode_flag = (1 << self->mode);
     static char submenu_icon = '+';
 
@@ -176,7 +172,7 @@ _mnupr__list_items_r(_self, menu, selected, count, level)
     {
 	loops = 2;
 	item_types = 0x01;
-	parents = (vimmenu_T**) alloc(sizeof(vimmenu_T*) * 10); // max supported menu depth
+	parents = (vimmenu_T**) alloc(sizeof(vimmenu_T*) * 10); /* max supported menu depth */
     }
     else
     {
@@ -276,28 +272,30 @@ _mnupr__list_items_r(_self, menu, selected, count, level)
 
     vim_free(parents);
     return isel;
+    END_METHOD;
 }
 
     static int
 _mnupr_list_items(_self, selected)
     void* _self;
     void* selected;
-{
     METHOD(MenuItemProvider, list_items);
+{
     int isel, count, level;
     self->op->clear_items(self);
     count = 0;
     level = 0;
     isel = self->op->_list_items_r(self, self->cur_menu, selected, &count, level);
     return isel;
+    END_METHOD;
 }
 
     static int
 _mnupr_select_item(_self, item)
     void* _self;
     int item;
-{
     METHOD(MenuItemProvider, select_item);
+{
     PopupItem_T* pit;
     vimmenu_T* pm;
     pit = self->op->get_item(self, item);
@@ -335,13 +333,14 @@ _mnupr_select_item(_self, item)
 
 	return -1;
     }
+    END_METHOD;
 }
 
     static int
 _mnupr_select_parent(_self)
     void* _self;
-{
     METHOD(MenuItemProvider, select_parent);
+{
     vimmenu_T *cur, *parent;
     int icur;
 
@@ -363,6 +362,7 @@ _mnupr_select_parent(_self)
 	icur = 0;
 
     return icur;
+    END_METHOD;
 }
 
     static char_u*
@@ -370,8 +370,8 @@ _mnupr_handle_command(_self, puls, command)
     void*	    _self;
     PopupList_T*    puls;
     char_u*	    command;
-{
     METHOD(MenuItemProvider, handle_command);
+{
     if (EQUALS(command, "menu-toggle-flat-view"))
     {
 	self->flat_view = !self->flat_view;
@@ -387,14 +387,15 @@ _mnupr_handle_command(_self, puls, command)
     }
 
     return NULL;
+    END_METHOD;
 }
 
     static void
 _mnupr_default_keymap(_self, puls)
     void* _self;
     PopupList_T* puls;
-{
     METHOD(MenuItemProvider, default_keymap);
+{
     SimpleKeymap_T* modemap;
 
     /* TODO: next mode depens on self->flat_view */
@@ -402,4 +403,5 @@ _mnupr_default_keymap(_self, puls)
     modemap->op->set_key(modemap, VSTR("*"), VSTR("menu-toggle-flat-view|auto-resize|modeswitch:filter"));
     modemap = puls->km_shortcut;
     modemap->op->set_key(modemap, VSTR("*"), VSTR("menu-toggle-flat-view|auto-resize|modeswitch:filter"));
+    END_METHOD;
 }

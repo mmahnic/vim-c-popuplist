@@ -38,7 +38,7 @@
     void* extra;      // optional extra data
     int   reverse;
     void  init();
-    void  destroy();
+    // void  destroy();
     int   compare(void* a, void* b);
   };
 
@@ -56,54 +56,51 @@
     static void
 _icmprtr_init(_self)
     void* _self;
-{
     METHOD(ItemComparator, init);
+{
     self->fn_compare = NULL;
     self->reverse = 0;
     self->extra = NULL;
+    END_METHOD;
 }
 
-    static void
-_icmprtr_destroy(_self)
-    void* _self;
-{
-    METHOD(ItemComparator, destroy);
-    END_DESTROY(ItemComparator);
-}
 
     static int
 _icmprtr_compare(_self, a, b)
     void* _self;
     void* a;
     void* b;
-{
     METHOD(ItemComparator, compare);
+{
     int rv = 0;
     if (self->fn_compare)
 	rv = (*self->fn_compare)(_self, a, b);
     return self->reverse ? (-rv) : rv;
+    END_METHOD;
 }
 
     static void
 _imtchr_init(_self)
     void* _self;
-{
     METHOD(ItemMatcher, init);
+{
     self->fn_match = NULL;
     self->reverse = 0;
     self->extra = NULL;
+    END_METHOD;
 }
 
     static int
 _imtchr_match(_self, item)
     void* _self;
     void* item;
-{
     METHOD(ItemMatcher, match);
+{
     int rv = 1;
     if (self->fn_match)
 	rv = (*self->fn_match)(_self, item);
     return self->reverse ? (!rv) : rv;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -116,7 +113,7 @@ _imtchr_match(_self, item)
     short   offs_next;     // offsetof(next) in item
     // short   offs_prev;     // offsetof(prev) in item (optional)
     void    init();
-    void    destroy();
+    // void    destroy();
     void    add_head(void* item);
     void    add_tail(void* item);
     void*   remove(void* item);
@@ -133,43 +130,37 @@ _imtchr_match(_self, item)
     static void
 _lsthlpr_init(_self)
     void* _self;
-{
     METHOD(ListHelper, init);
+{
     self->first = NULL;
     self->last = NULL;
     self->fn_destroy = NULL;
     self->offs_next = -1;
     /*self->offs_prev = -1;*/
-}
-
-    static void
-_lsthlpr_destroy(_self)
-    void* _self;
-{
-    METHOD(ListHelper, destroy);
-    END_DESTROY(ListHelper);
+    END_METHOD;
 }
 
     static void
 _lsthlpr_add_head(_self, item)
     void* _self;
     void* item;
-{
     METHOD(ListHelper, add_head);
+{
     /* ASSERT(self->first && self->offs_next >= 0) */
     void *pit = *self->first;
     *self->first = item;
-    *(void**)(item + self->offs_next) = pit;            /* item->next = pit */
+    *(void**)((char*)item + self->offs_next) = pit;            /* item->next = pit */
     if (self->last && ! *self->last)
 	*self->last = pit;
+    END_METHOD;
 }
 
     static void
 _lsthlpr_add_tail(_self, item)
     void* _self;
     void* item;
-{
     METHOD(ListHelper, add_tail);
+{
     /* ASSERT(self->first && self->offs_next >= 0) */
     void *pit;
     short offnext = self->offs_next;
@@ -190,20 +181,21 @@ _lsthlpr_add_tail(_self, item)
 	else
 	{
 	    pit = *self->first;
-	    while (*(void**)(pit + offnext) != NULL) /* while pit->next != NULL */
-		pit = *(void**)(pit + offnext);      /* pit = pit->next */
+	    while (*(void**)((char*)pit + offnext) != NULL) /* while pit->next != NULL */
+	        pit = *(void**)((char*)pit + offnext);      /* pit = pit->next */
 	}
-	*(void**)(pit + offnext) = item;         /* pit->next = item */
+	*(void**)((char*)pit + offnext) = item;         /* pit->next = item */
     }
-    *(void**)(item + offnext) = NULL;            /* item->next = NULL */
+    *(void**)((char*)item + offnext) = NULL;            /* item->next = NULL */
+    END_METHOD;
 }
 
     static void*
 _lsthlpr_remove(_self, item)
     void* _self;
     void* item;
-{
     METHOD(ListHelper, remove);
+{
     /* ASSERT(self->first && self->offs_next >= 0) */
     void *pit, *pnext;
     short offnext = self->offs_next;
@@ -212,7 +204,7 @@ _lsthlpr_remove(_self, item)
     else if (*self->first == item)
     {
 	pit = *self->first;
-	*self->first = *(void**)(self->first + offnext); /* first = first->next */
+	*self->first = *(void**)((char*)self->first + offnext); /* first = first->next */
 	if (self->last && ! *self->first)
 	    *self->last = NULL;
 	return pit;
@@ -220,13 +212,13 @@ _lsthlpr_remove(_self, item)
     else
     {
 	pit = *self->first;
-	while (*(void**)(pit + offnext) != NULL)   /* while pit->next != NULL */
+	while (*(void**)((char*)pit + offnext) != NULL)   /* while pit->next != NULL */
 	{
-	    pnext = *(void**)(pit + offnext);
+	    pnext = *(void**)((char*)pit + offnext);
 	    if (pnext == item)  /* if pit->next == item */
 	    {
 		/* pit->next = pit->next->next  ... = item->next*/
-		*(void**)(pit + offnext) = *(void**)(pnext + offnext);
+		*(void**)((char*)pit + offnext) = *(void**)((char*)pnext + offnext);
 		if (self->last && *self->last == item)
 		    *self->last = pit;
 		return pnext;
@@ -235,24 +227,26 @@ _lsthlpr_remove(_self, item)
 	}
     }
     return NULL;
+    END_METHOD;
 }
 
     static void*
 _lsthlpr_remove_head(_self)
     void* _self;
-{
     METHOD(ListHelper, remove_head);
+{
     void* pit;
     /* ASSERT(self->first && self->offs_next >= 0) */
     if (*self->first)
     {
 	pit = *self->first;
-	*self->first = *(void**)(pit + self->offs_next); /* first = first->next */
+	*self->first = *(void**)((char*)pit + self->offs_next); /* first = first->next */
 	if (self->last && ! *self->first)
 	    *self->last = NULL;
 	return pit;
     }
     return NULL;
+    END_METHOD;
 }
 
     static int
@@ -260,8 +254,8 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
     void* _self;
     ItemMatcher_T* cond;
     int dodel;
-{
     METHOD(ListHelper, _rem_del_all);
+{
     /* ASSERT(self->first && self->offs_next >= 0) */
     void *pit, *pnext, *pdel;
     short offnext = self->offs_next;
@@ -271,7 +265,7 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
     while (pit && (!cond || cond->op->match(cond, pit)))
     {
 	pdel = pit;
-	pit = *(void**)(pit + offnext);    /* pit = pit->next */
+	pit = *(void**)((char*)pit + offnext);    /* pit = pit->next */
 	if (self->last && *self->last == pdel)
 	    *self->last = NULL;
 	if (dodel)
@@ -283,14 +277,14 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
 	++count;
     }
     *self->first = pit;
-    pnext = pit ? *(void**)(pit + offnext) : NULL;
+    pnext = pit ? *(void**)((char*)pit + offnext) : NULL;
     while (pnext)
     {
 	if (!cond || cond->op->match(cond, pnext))
 	{
 	    pdel = pnext;
 	    /* pit->next = pit->next->next */
-	    *(void**)(pit + offnext) = *(void**)(pnext + offnext);
+	    *(void**)((char*)pit + offnext) = *(void**)((char*)pnext + offnext);
 	    if (self->last && *self->last == pdel)
 		*self->last = pit;
 	    if (dodel)
@@ -303,28 +297,31 @@ _lsthlpr__rem_del_all(_self, cond, dodel)
 	}
 	else
 	    pit = pnext;
-	pnext = *(void**)(pit + offnext);
+	pnext = *(void**)((char*)pit + offnext);
     }
 
     return count;
+    END_METHOD;
 }
 
     static int
 _lsthlpr_remove_all(_self, cond)
     void* _self;
     ItemMatcher_T* cond;
-{
     METHOD(ListHelper, remove_all);
+{
     return _lsthlpr__rem_del_all(_self, cond, 0);
+    END_METHOD;
 }
 
     static int
 _lsthlpr_delete_all(_self, cond)
     void* _self;
     ItemMatcher_T* cond;
-{
     METHOD(ListHelper, delete_all);
+{
     return _lsthlpr__rem_del_all(_self, cond, 1);
+    END_METHOD;
 }
 
 
@@ -346,17 +343,18 @@ _lsthlpr_delete_all(_self, cond)
     static void
 _dicti_init(_self)
     void* _self;
-{
     METHOD(DictIterator, init);
+{
     self->dict = NULL;
     self->current = NULL;
+    END_METHOD;
 }
 
     static void
 _dicti_destroy(_self)
     void* _self;
-{
     METHOD(DictIterator, destroy);
+{
     self->dict = NULL;
     self->current = NULL;
     END_DESTROY(DictIterator);
@@ -366,8 +364,8 @@ _dicti_destroy(_self)
 _dicti_begin(_self, dict)
     void* _self;
     dict_T* dict;
-{
     METHOD(DictIterator, begin);
+{
     self->dict = dict;
     self->todo = (int)dict->dv_hashtab.ht_used;
     self->current = dict->dv_hashtab.ht_array;
@@ -378,13 +376,14 @@ _dicti_begin(_self, dict)
 
     --self->todo;
     return HI2DI(self->current);
+    END_METHOD;
 }
 
     static dictitem_T*
 _dicti_next(_self)
     void* _self;
-{
     METHOD(DictIterator, next);
+{
     if (self->todo < 1)
 	return NULL;
     ++self->current;
@@ -393,6 +392,7 @@ _dicti_next(_self)
 
     --self->todo;
     return HI2DI(self->current);
+    END_METHOD;
 }
 
 /* [ooc]
@@ -430,8 +430,8 @@ _dicti_next(_self)
     static void
 _sgarr_init(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, init);
+{
     self->index = NULL;
     self->fn_destroy = NULL;
     self->len = 0;
@@ -439,13 +439,14 @@ _sgarr_init(_self)
     self->index_size = 0;
     self->index_len = 0;
     self->segment_len = 0;
+    END_METHOD;
 }
 
     static void
 _sgarr_clear_contents(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, clear_contents);
+{
     int i, j, len;
     void* pseg;
     if (self->fn_destroy && self->index && self->len > 0)
@@ -457,19 +458,20 @@ _sgarr_clear_contents(_self)
 	    for(j = 0; j < self->segment_len && len > 0; j++)
 	    {
 		(*self->fn_destroy)(pseg);
-		pseg += self->item_size;
+		pseg = (char*)pseg + self->item_size;
 		--len;
 	    }
 	}
     }
     self->len = 0;
+    END_METHOD;
 }
 
     static void
 _sgarr_clear(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, clear);
+{
     int i;
 
     if (self->index)
@@ -485,13 +487,14 @@ _sgarr_clear(_self)
     self->index_size = 0;
     self->index_len = 0;
     self->segment_len = 0;
+    END_METHOD;
 }
 
     static void
 _sgarr_truncate(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, truncate);
+{
     int req_idxlen;
 
     if (self->len < 1 || self->item_size < 1)
@@ -510,13 +513,14 @@ _sgarr_truncate(_self)
 	vim_free(self->index[self->index_len]);
 	self->index[self->index_len] = NULL;
     }
+    END_METHOD;
 }
 
     static void
 _sgarr_destroy(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, destroy);
+{
     if (self->index)
 	self->op->clear(self);
     END_DESTROY(SegmentedGrowArray);
@@ -526,8 +530,8 @@ _sgarr_destroy(_self)
 _sgarr_grow(_self, count)
     void* _self;
     int count;
-{
     METHOD(SegmentedGrowArray, grow);
+{
     int size, newlen, new_idxlen;
     void* pseg;
     if (count < 0)
@@ -569,13 +573,14 @@ _sgarr_grow(_self, count)
 
     self->len = newlen;
     return OK;
+    END_METHOD;
 }
 
     static void*
 _sgarr_get_new_item(_self)
     void* _self;
-{
     METHOD(SegmentedGrowArray, get_new_item);
+{
     void* pseg;
     int ii;
     if (self->op->grow(self, 1) != OK)
@@ -584,15 +589,16 @@ _sgarr_get_new_item(_self)
     pseg = self->index[ii / self->segment_len];
     ii = ii % self->segment_len;
 
-    return pseg + ii * self->item_size;
+    return (void*)((char*)pseg + ii * self->item_size);
+    END_METHOD;
 }
 
     static void*
 _sgarr_get_item(_self, index)
     void* _self;
     int index;
-{
     METHOD(SegmentedGrowArray, get_item);
+{
     void* pseg;
     int ii;
     if (! self->index || index < 0 || index >= self->len)
@@ -602,17 +608,19 @@ _sgarr_get_item(_self, index)
 	return NULL;
     ii = index % self->segment_len;
 
-    return pseg + ii * self->item_size;
+    return (void*)((char*)pseg + ii * self->item_size);
+    END_METHOD;
 }
 
     static void
 _sgarr_sort(_self, cmp)
     void* _self;
     ItemComparator_T* cmp;
-{
     METHOD(SegmentedGrowArray, sort);
+{
     if (self->len > 1)
 	self->op->_qsort(self, 0, self->len-1, cmp);
+    END_METHOD;
 }
 
 /* FIXME: if cmp doesn't give consistent results (is not a well-ordering), _qsort will crash.
@@ -625,8 +633,8 @@ _sgarr__qsort (_self, low, high, cmp)
     int low;
     int high;
     ItemComparator_T* cmp;
-{
     METHOD(SegmentedGrowArray, _qsort);
+{
     typedef struct _stackitem_ {
 	int low;
 	int high;
@@ -811,6 +819,7 @@ simple_sort: /* 'params': ni, l */
     vim_free(tmp);
     vim_free(pivot);
     vim_free(stack);
+    END_METHOD;
 }
 
     SegmentedGrowArray_T*
@@ -840,18 +849,19 @@ new_SegmentedGrowArrayP(int item_size, Destroy_Fn fn_destroy)
     static void
 _itsgarr_init(_self)
     void* _self;
-{
     METHOD(SegmentedArrayIterator, init);
+{
     self->array = NULL;
     self->iitem = 0;
+    END_METHOD;
 }
 
     static void*
 _itsgarr_begin(_self, container)
     void* _self;
     SegmentedGrowArray_T* container;
-{
     METHOD(SegmentedArrayIterator, begin);
+{
     void* pseg;
     self->array = (SegmentedGrowArray_T*) container;
     if (!self->array || !self->array->index || self->array->len < 1)
@@ -859,13 +869,14 @@ _itsgarr_begin(_self, container)
     self->iitem = 0;
     pseg = self->array->index[0];
     return pseg;
+    END_METHOD;
 }
 
     static void*
 _itsgarr_next(_self)
     void* _self;
-{
     METHOD(SegmentedArrayIterator, next);
+{
     void* pseg;
     if (!self->array || !self->array->index || self->iitem >= self->array->len - 1)
 	return NULL;
@@ -875,8 +886,9 @@ _itsgarr_next(_self)
     if (!pseg)
 	return NULL;
 
-    pseg += (self->iitem % self->array->segment_len) * self->array->item_size;
+    pseg = (char*)pseg + (self->iitem % self->array->segment_len) * self->array->item_size;
     return pseg;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -908,40 +920,43 @@ _itsgarr_next(_self)
     static void
 _ntfcb_init(_self)
     void* _self;
-{
     METHOD(NotificationCallback, init);
+{
     self->next = NULL;
     self->instance_self = NULL;
     self->callback = NULL;
+    END_METHOD;
 }
 
     static int
 _ntfcb_call(_self, _data)
     void* _self;
     void* _data;
-{
     METHOD(NotificationCallback, call);
+{
     if (! self->callback)
 	return 0;
     return (*self->callback)(self->instance_self, _data);
+    END_METHOD;
 }
 
     static void
 _ntlst_init(_self)
     void* _self;
-{
     METHOD(NotificationList, init);
+{
     self->observers = NULL;
     self->lst_observers.first = (void**)&self->observers;
     self->lst_observers.offs_next = offsetof(NotificationCallback_T, next);
     /* items don't need destruction, so we don't set lst_observers.fn_destroy */
+    END_METHOD;
 }
 
     static void
 _ntlst_destroy(_self)
     void* _self;
-{
     METHOD(NotificationList, destroy);
+{
     NotificationCallback_T* pit;
     while (self->observers)
     {
@@ -956,8 +971,8 @@ _ntlst_destroy(_self)
 _ntlst_notify(_self, _data)
     void* _self;
     void* _data;
-{
     METHOD(NotificationList, notify);
+{
     NotificationCallback_T* pit;
     pit = self->observers;
     while (pit)
@@ -965,6 +980,7 @@ _ntlst_notify(_self, _data)
 	_ntfcb_call(pit, _data);
 	pit = pit->next;
     }
+    END_METHOD;
 }
 
     static void
@@ -972,13 +988,14 @@ _ntlst_add(_self, instance, callback)
     void* _self;
     void* instance;
     MethodCallback_Fn callback;
-{
     METHOD(NotificationList, add);
+{
     NotificationCallback_T *pnew;
     pnew = new_NotificationCallback();
     pnew->instance_self = instance;
     pnew->callback = callback;
     self->lst_observers.op->add_tail(&self->lst_observers, pnew);
+    END_METHOD;
 }
 
     static int
@@ -993,33 +1010,46 @@ _fn_match_callback_instance(matcher, item)
 _ntlst_remove_obj(_self, instance)
     void* _self;
     void* instance;
-{
     METHOD(NotificationList, remove_obj);
-    ItemMatcher_T cmp;
-    init_ItemMatcher(&cmp);
-    cmp.fn_match = &_fn_match_callback_instance;
-    cmp.extra = instance;
-    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
+{
+    ItemMatcher_T* pcmp;
+    pcmp = new_ItemMatcher();
+    pcmp->fn_match = &_fn_match_callback_instance;
+    pcmp->extra = instance;
+    self->lst_observers.op->delete_all(&self->lst_observers, pcmp);
+    CLASS_DELETE(pcmp);
+    END_METHOD;
 }
+
+typedef struct _callback_holder_t_
+{
+    MethodCallback_Fn callback;
+} _callbackHolder_T;
 
     static int
 _fn_match_callback_callback(matcher, item)
     ItemMatcher_T* matcher;
     NotificationCallback_T* item;
 {
-    return (matcher->extra == item->callback);
+    if (!matcher->extra || !item->callback)
+	return 0;
+    return (((_callbackHolder_T*)matcher->extra)->callback == item->callback);
 }
 
     static void
 _ntlst_remove_cb(_self, callback)
     void* _self;
     MethodCallback_Fn callback;
-{
     METHOD(NotificationList, remove_cb);
-    ItemMatcher_T cmp;
-    init_ItemMatcher(&cmp);
-    cmp.fn_match = &_fn_match_callback_callback;
-    cmp.extra = callback;
-    self->lst_observers.op->delete_all(&self->lst_observers, &cmp);
+{
+    ItemMatcher_T* pcmp;
+    _callbackHolder_T cbholder;
+    pcmp = new_ItemMatcher();
+    pcmp->fn_match = &_fn_match_callback_callback;
+    cbholder.callback = callback;
+    pcmp->extra = &cbholder;
+    self->lst_observers.op->delete_all(&self->lst_observers, pcmp);
+    CLASS_DELETE(pcmp);
+    END_METHOD;
 }
 

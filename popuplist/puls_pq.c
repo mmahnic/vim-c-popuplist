@@ -93,19 +93,20 @@ extern qf_info_T ql_info;	/* global quickfix list; TODO: make it non-static in q
     static void
 _qfxpr_init(_self)
     void* _self;
-{
     METHOD(QuickfixItemProvider, init);
+{
     self->qfinfo = NULL;
     self->_dispbuf = NULL;
     self->_dispbuf_len = 0;
     self->has_title_items = 1;
+    END_METHOD;
 }
 
     static void
 _qfxpr_destroy(_self)
     void* _self;
-{
     METHOD(QuickfixItemProvider, destroy);
+{
     self->qfinfo = NULL; /* popuplist doesn't own the quickfix list */
     vim_free(self->_dispbuf);
     END_DESTROY(QuickfixItemProvider);
@@ -115,8 +116,8 @@ _qfxpr_destroy(_self)
 _qfxpr__prepare_dispbuf(_self, len)
     void* _self;
     int len;
-{
     METHOD(QuickfixItemProvider, _prepare_dispbuf);
+{
     if (len > self->_dispbuf_len)
     {
 	vim_free(self->_dispbuf);
@@ -124,13 +125,14 @@ _qfxpr__prepare_dispbuf(_self, len)
 	self->_dispbuf_len = self->_dispbuf ? len : 0;
     }
     return self->_dispbuf_len;
+    END_METHOD;
 }
 
     static void
 _qfxpr__update_title(_self)
     void* _self;
-{
     METHOD(QuickfixItemProvider, _update_title);
+{
     qf_list_T *plist;
     if (!self->qfinfo)
 	return;
@@ -146,24 +148,27 @@ _qfxpr__update_title(_self)
 	    self->op->set_title(self, self->_dispbuf);
 	}
     }
+    END_METHOD;
 }
 
     static void
 _qfxpr_on_start(_self)
     void* _self;
-{
     METHOD(QuickfixItemProvider, on_start);
+{
     self->op->_update_title(self);
+    END_METHOD;
 }
 
     static char_u*
 _qfxpr_get_display_text(_self, item)
     void* _self;
     int item;
-{
     METHOD(QuickfixItemProvider, get_display_text);
+{
     PopupItem_T* pit;
     qfline_T  *pqerr;
+    int len;
     pit = self->items->op->get_item(self->items, item);
     if (! pit)
 	return NULL;
@@ -177,7 +182,7 @@ _qfxpr_get_display_text(_self, item)
      *    => display:   " 123: error description"
      * This would probably require a design change in TextWriter-s. */
 
-    int len = 16 + STRLEN(pit->text);
+    len = 16 + STRLEN(pit->text);
     if (! self->op->_prepare_dispbuf(self, len))
 	return pit->text;
 
@@ -185,13 +190,14 @@ _qfxpr_get_display_text(_self, item)
     vim_snprintf((char*)self->_dispbuf, self->_dispbuf_len, " %3d: %s", pqerr->qf_lnum, pit->text);
 
     return self->_dispbuf;
+    END_METHOD;
 }
 
     static int
 _qfxpr_list_items(_self)
     void* _self;
-{
     METHOD(QuickfixItemProvider, list_items);
+{
     qf_list_T *plist;
     qfline_T  *pqerr, *pprev;
     int isel, i;
@@ -232,14 +238,15 @@ _qfxpr_list_items(_self)
     }
 
     return isel;
+    END_METHOD;
 }
 
     static int
 _qfxpr_select_item(_self, item)
     void* _self;
     int item;
-{
     METHOD(QuickfixItemProvider, select_item);
+{
     PopupItem_T* pit;
     if (! self->qfinfo)
 	return 1;
@@ -252,14 +259,15 @@ _qfxpr_select_item(_self, item)
 	return 0;
 
     return 1;
+    END_METHOD;
 }
 
     static int
 _qfxpr__display_item(_self, pitem)
     void* _self;
     PopupItem_T* pitem;
-{
     METHOD(QuickfixItemProvider, _display_item);
+{
     qf_list_T *plist;
     qfline_T  *pqerr;
     int i;
@@ -279,5 +287,6 @@ _qfxpr__display_item(_self, pitem)
     }
 
     return 0;
+    END_METHOD;
 }
 

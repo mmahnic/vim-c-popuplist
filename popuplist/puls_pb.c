@@ -39,7 +39,7 @@
     int		show_unlisted;
     list_T*	mru_list;
     void	init();
-    void	destroy();
+    // void	destroy();
     void	read_options(dict_T* options);
     void	on_start();
     void	default_keymap(PopupList* puls);
@@ -57,36 +57,30 @@
     static void
 _bprov_init(_self)
     void* _self;
-{
     METHOD(BufferItemProvider, init);
+{
     self->sorted_by = BUFSORT_NR;
     self->show_unlisted = 0;
     self->mru_list = NULL;
-}
-
-    static void
-_bprov_destroy(_self)
-    void* _self;
-{
-    METHOD(BufferItemProvider, destroy);
-    END_DESTROY(BufferItemProvider);
+    END_METHOD;
 }
 
     static char_u*
 _bprov_get_title(_self)
     void* _self;
-{
     METHOD(ItemProvider, get_title);
+{
     static char_u title[] = "Buffers";
     return title;
+    END_METHOD;
 }
 
     static void
 _bprov_read_options(_self, options)
     void* _self;
     dict_T* options;
-{
     METHOD(BufferItemProvider, read_options);
+{
     dictitem_T* option;
 
     option = dict_find(options, VSTR("unlisted"), -1L);
@@ -107,23 +101,25 @@ _bprov_read_options(_self, options)
     {
 	self->mru_list = option->di_tv.vval.v_list;
     }
+    END_METHOD;
 }
 
     static void
 _bprov_on_start(_self)
     void* _self;
-{
     METHOD(BufferItemProvider, on_start);
+{
     LOG(("BufferItemProvider on_start"));
     if (self->sorted_by != BUFSORT_NR)
 	self->op->sort_buffers(self);
+    END_METHOD;
 }
 
     static void
 _bprov_list_buffers(_self)
     void* _self;
-{
     METHOD(BufferItemProvider, list_buffers);
+{
     buf_T	*buf;
     int		len;
     int		i;
@@ -193,6 +189,7 @@ _bprov_list_buffers(_self)
 	    }
 	}
     }
+    END_METHOD;
 }
 
     static int
@@ -258,40 +255,41 @@ _PulsPb_MruOrderCmp_bufnr(comparator, a, b)
     static int
 _bprov_sort_buffers(_self)
     void* _self;
-{
     METHOD(BufferItemProvider, sort_buffers);
+{
     SegmentedGrowArray_T order;
     SegmentedArrayIterator_T itbufs, itorder;
-    ItemComparator_T cmp;
+    ItemComparator_T* pcmp;
     listitem_T* plit;
     ushort i;
     _pulspb_bufnr_order_T* pord;
     PopupItem_T* ppit;
-    init_ItemComparator(&cmp);
+    int rv;
 
     LOG(("BufferItemProvider sort_buffers"));
+    pcmp = new_ItemComparator();
 
     switch (self->sorted_by)
     {
 	case BUFSORT_NR:
-	    cmp.fn_compare = &_BufferItem_cmp_nr;
-	    return self->op->sort_items(self, &cmp);
+	    pcmp->fn_compare = &_BufferItem_cmp_nr;
+	    break;
 	case BUFSORT_PATH:
-	    cmp.fn_compare = &_BufferItem_cmp_path;
-	    return self->op->sort_items(self, &cmp);
+	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    break;
 	case BUFSORT_NAME:
-	    cmp.fn_compare = &_BufferItem_cmp_path;
-	    return self->op->sort_items(self, &cmp); /* TODO: _name */
+	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    break;
 	case BUFSORT_EXT:
-	    cmp.fn_compare = &_BufferItem_cmp_path;
-	    return self->op->sort_items(self, &cmp); /* TODO: _ext */
+	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    break;
 	case BUFSORT_MRU:
 	    LOG(("BufferItemProvider BUFSORT_MRU"));
 	    if (self->mru_list)
 	    {
 		/* 1. sort by bufnr */
-		cmp.fn_compare = &_BufferItem_cmp_nr;
-		if (self->op->sort_items(self, &cmp))
+		pcmp->fn_compare = &_BufferItem_cmp_nr;
+		if (self->op->sort_items(self, pcmp))
 		{
 		    /* 2. sort the MRU list by bufnr, but remember the MRU position */
 		    init_SegmentedGrowArray(&order);
@@ -309,8 +307,8 @@ _bprov_sort_buffers(_self)
 			}
 			plit = plit->li_next;
 		    }
-		    cmp.fn_compare = &_PulsPb_MruOrderCmp_bufnr;
-		    order.op->sort(&order, &cmp);
+		    pcmp->fn_compare = &_PulsPb_MruOrderCmp_bufnr;
+		    order.op->sort(&order, pcmp);
 
 		    /* 3. Assign mru_order to buffer items; use filter_score for that. */
 		    init_SegmentedArrayIterator(&itbufs);
@@ -341,25 +339,30 @@ _bprov_sort_buffers(_self)
 		    order.op->destroy(&order);
 
 		    /* 4. Sort buffers by filter_score (ie. MRU order) */
-		    cmp.fn_compare = &_BufferItem_cmp_filter_score;
-		    return self->op->sort_items(self, &cmp);
+		    pcmp->fn_compare = &_BufferItem_cmp_filter_score;
+		    return self->op->sort_items(self, pcmp);
 		}
 	    }
-	    return 0;
+	    break;
+	default:
+	    /* unknown sort mode -> sort by number */
+	    self->sorted_by = BUFSORT_NR;
+	    pcmp->fn_compare = &_BufferItem_cmp_nr;
+	    break;
     }
 
-    /* unknown sort mode -> sort by number */
-    self->sorted_by = BUFSORT_NR;
-    cmp.fn_compare = &_BufferItem_cmp_nr;
-    return self->op->sort_items(self, &cmp);
+    rv = pcmp->fn_compare ? self->op->sort_items(self, pcmp) : 0;
+    CLASS_DELETE(pcmp);
+    return rv;
+    END_METHOD;
 }
 
     static int
 _bprov__index_to_bufnr(_self, index)
     void*   _self;
     int	    index;
-{
     METHOD(BufferItemProvider, _index_to_bufnr);
+{
     PopupItem_T* pit;
     buf_T* pbuf;
     pit = self->op->get_item(self, index);
@@ -369,14 +372,15 @@ _bprov__index_to_bufnr(_self, index)
 	return pbuf->b_fnum;
     }
     return -1;
+    END_METHOD;
 }
 
     static void
 _bprov_update_result(_self, status)
     void*	_self;
     dict_T*	status;
-{
     METHOD(BufferItemProvider, update_result);
+{
     dictitem_T* pdi;
 
     /* convert index to bufnr */
@@ -397,6 +401,7 @@ _bprov_update_result(_self, status)
 	    pitem = pitem->li_next;
 	}
     }
+    END_METHOD;
 }
 
 
@@ -405,8 +410,8 @@ _bprov_handle_command(_self, puls, command)
     void*	    _self;
     PopupList_T*    puls;
     char_u*	    command;
-{
     METHOD(BufferItemProvider, handle_command);
+{
 
     if (STARTSWITH(command, "buf-sort"))
     {
@@ -459,14 +464,15 @@ _bprov_handle_command(_self, puls, command)
     }
 
     return NULL;
+    END_METHOD;
 }
 
     static void
 _bprov_default_keymap(_self, puls)
     void* _self;
     PopupList_T* puls;
-{
     METHOD(ItemProvider, default_keymap);
+{
     SimpleKeymap_T* modemap;
 
     modemap = puls->km_normal;
@@ -481,4 +487,5 @@ _bprov_default_keymap(_self, puls)
     modemap->op->set_key(modemap, VSTR("u"),  VSTR("buf-toggle-unlisted"));
 
     super(BufferItemProvider, default_keymap)(self, puls);
+    END_METHOD;
 }

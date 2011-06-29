@@ -87,7 +87,7 @@ static char_u blankline[] = "";
 static char_u cmd_quit[] = "quit";
 static char_u cmd_accept[] = "accept";
 
-/*#define DEBUG*/
+#define DEBUG
 /*#define INCLUDE_TESTS*/
 
 #if (defined(INCLUDE_TESTS) || defined(DEBUG))
@@ -109,7 +109,7 @@ pulslog(char* fmt, ...)
 
     item = (listitem_T*) alloc(sizeof(listitem_T));
     item->li_tv.v_type = VAR_STRING;
-    item->li_tv.vval.v_string = vim_strsave(buf);
+    item->li_tv.vval.v_string = vim_strsave((char_u*)buf);
 
     /* from list_append */
     if (PULSLOG.lv_last == NULL)
@@ -362,17 +362,18 @@ _update_hl_attrs()
     static void
 _cmdqit_init(_self)
     void* _self;
-{
     METHOD(CommandQueueItem, init);
+{
     self->command = NULL;
     self->next = NULL;
+    END_METHOD;
 }
 
     static void
 _cmdqit_destroy(_self)
     void* _self;
-{
     METHOD(CommandQueueItem, destroy);
+{
     vim_free(self->command);
     END_DESTROY(CommandQueueItem);
 }
@@ -380,8 +381,8 @@ _cmdqit_destroy(_self)
     static void
 _cmdque_init(_self)
     void* _self;
-{
     METHOD(CommandQueue, init);
+{
     self->_cmd_list_first = NULL;
     self->_cmd_list_last = NULL;
     self->_commands = new_ListHelper();
@@ -389,13 +390,14 @@ _cmdque_init(_self)
     self->_commands->last = (void**) &self->_cmd_list_last;
     self->_commands->offs_next = offsetof(CommandQueueItem_T, next);
     self->_commands->fn_destroy = &_cmdqit_destroy;
+    END_METHOD;
 }
 
     static void
 _cmdque_destroy(_self)
     void* _self;
-{
     METHOD(CommandQueue, destroy);
+{
     self->_commands->op->delete_all(self->_commands, NULL);
     CLASS_DELETE(self->_commands);
     END_DESTROY(CommandQueue);
@@ -405,8 +407,8 @@ _cmdque_destroy(_self)
 _cmdque_add(_self, command)
     void* _self;
     char_u* command;
-{
     METHOD(CommandQueue, add);
+{
     char_u *ps, *pe;
     CommandQueueItem_T* pit;
     if (!command || !*command)
@@ -442,27 +444,30 @@ _cmdque_add(_self, command)
 	pit->command = vim_strnsave(ps, pe-ps+1);
 	self->_commands->op->add_tail(self->_commands, pit);
     }
+    END_METHOD;
 }
 
     static char_u*
 _cmdque_head(_self)
     void* _self;
-{
     METHOD(CommandQueue, head);
+{
     if (! self->_cmd_list_first)
 	return NULL;
     return self->_cmd_list_first->command;
+    END_METHOD;
 }
 
     static void
 _cmdque_pop(_self)
     void* _self;
-{
     METHOD(CommandQueue, pop);
+{
     CommandQueueItem_T* pit;
     pit = (CommandQueueItem_T*) self->_commands->op->remove_head(self->_commands);
     if (pit)
 	vim_free(pit);
+    END_METHOD;
 }
 
 /* [ooc]
@@ -493,8 +498,8 @@ _cmdque_pop(_self)
     static void
 _ppit_init(_self)
     void* _self;
-{
     METHOD(PopupItem, init);
+{
     self->data		= NULL;
     self->text		= NULL;
     self->flags		= 0;
@@ -502,13 +507,14 @@ _ppit_init(_self)
     self->filter_length	= 65535; /* assume NUL terminated string */
     self->filter_score	= 1;
     self->filter_parent_score = 0;
+    END_METHOD;
 }
 
     static void
 _ppit_destroy(_self)
     void* _self;
-{
     METHOD(PopupItem, destroy);
+{
     if (self->text && !(self->flags & ITEM_SHARED))
     {
 	vim_free(self->text);
@@ -591,21 +597,22 @@ _ppit_destroy(_self)
     static void
 _iprov_init(_self)
     void* _self;
-{
     METHOD(ItemProvider, init);
+{
     self->commands = NULL;
     self->title = NULL;
     self->items = new_SegmentedGrowArrayP(sizeof(PopupItem_T), &_ppit_destroy);
     self->has_title_items = 0;
     self->has_shortcuts = 0;
     self->out_of_sync = 0;
+    END_METHOD;
 }
 
     static void
 _iprov_destroy(_self)
     void* _self;
-{
     METHOD(ItemProvider, destroy);
+{
     /* delete cached text from items */
     self->op->clear_items(self);
 
@@ -630,50 +637,56 @@ _iprov_destroy(_self)
 _iprov_read_options(_self, options)
     void* _self;
     dict_T* options;
-{
     METHOD(ItemProvider, read_options);
+{
+    END_METHOD;
 }
 
     static void
 _iprov_on_start(_self)
     void* _self;
-{
     METHOD(ItemProvider, on_start);
+{
+    END_METHOD;
 }
 
     static void
 _iprov_clear_items(_self)
     void* _self;
-{
     METHOD(ItemProvider, clear_items);
+{
     /* clear deletes cached text from items */
     self->items->op->clear(self->items);
+    END_METHOD;
 }
 
     static void
 _iprov_sync_items(_self)
     void* _self;
-{
     METHOD(ItemProvider, sync_items);
+{
+    END_METHOD;
 }
 
     static int
 _iprov_get_item_count(_self)
     void* _self;
-{
     METHOD(ItemProvider, get_item_count);
+{
     return self->items->len;
+    END_METHOD;
 }
 
     static PopupItem_T*
 _iprov_get_item(_self, item)
     void* _self;
     int item;
-{
     METHOD(ItemProvider, get_item);
+{
     if (item < 0 || item >= self->items->len)
 	return NULL;
     return (PopupItem_T*) (self->items->op->get_item(self->items, item));
+    END_METHOD;
 }
 
     static PopupItem_T*
@@ -681,8 +694,8 @@ _iprov_append_pchar_item(_self, text, shared)
     void* _self;
     char_u* text;
     int shared;
-{
     METHOD(ItemProvider, append_pchar_item);
+{
     PopupItem_T* pitnew;
     pitnew = self->items->op->get_new_item(self->items);
     if (pitnew)
@@ -694,56 +707,62 @@ _iprov_append_pchar_item(_self, text, shared)
 	return pitnew;
     }
     return NULL;
+    END_METHOD;
 }
 
     static char_u*
 _iprov_get_display_text(_self, item)
     void* _self;
     int item;
-{
     METHOD(ItemProvider, get_display_text);
+{
     PopupItem_T* pit;
     pit = self->items->op->get_item(self->items, item);
     return pit ? pit->text : NULL;
+    END_METHOD;
 }
 
     static char_u*
 _iprov_get_filter_text(_self, item)
     void* _self;
     int item;
-{
     METHOD(ItemProvider, get_filter_text);
+{
     PopupItem_T* pit;
     pit = self->items->op->get_item(self->items, item);
     if (!pit || !pit->text)
 	return NULL;
     return pit->text + pit->filter_start;
+    END_METHOD;
 }
 
     static char_u*
 _iprov_get_path_text(_self)
     void* _self;
-{
     METHOD(ItemProvider, get_path_text);
+{
     return NULL;
+    END_METHOD;
 }
 
     static char_u*
 _iprov_get_title(_self)
     void* _self;
-{
     METHOD(ItemProvider, get_title);
+{
     return self->title;
+    END_METHOD;
 }
 
     static void
 _iprov_set_title(_self, title)
     void*   _self;
     char_u* title;
-{
     METHOD(ItemProvider, set_title);
+{
     _str_assign(&self->title, title);
     self->title_obsrvrs.op->notify(&self->title_obsrvrs, NULL);
+    END_METHOD;
 }
 
     static void
@@ -751,14 +770,15 @@ _iprov_set_marked(_self, item, marked)
     void* _self;
     int item;
     int marked;
-{
     METHOD(ItemProvider, set_marked);
+{
     PopupItem_T* pit;
     pit = self->items->op->get_item(self->items, item);
     if (!pit)
 	return;
     if (marked) pit->flags |= ITEM_MARKED;
     else pit->flags &= ~ITEM_MARKED;
+    END_METHOD;
 }
 
     static uint
@@ -766,36 +786,39 @@ _iprov_has_flag(_self, item, flag)
     void* _self;
     int item;
     uint flag;
-{
     METHOD(ItemProvider, has_flag);
+{
     PopupItem_T* pit;
     pit = self->items->op->get_item(self->items, item);
     if (!pit)
 	return 0;
 
     return pit->flags & flag;
+    END_METHOD;
 }
 
     static int
 _iprov_select_item(_self, item)
     void* _self;
     int item;
-{
     METHOD(ItemProvider, select_item);
+{
     return 0; /* a leaf item, execute */
     /* TODO: VimlistItemProvider calls handle_command('itemselected') when it
      * is defined in options. Something similar should be done in
      * select_parent: call handle_command('parentselected') if defined. An
      * alternative is to keep the contents of the list on stack before
      * executing 'itemselected'. */
+    END_METHOD;
 }
 
     static int
 _iprov_select_parent(_self)
     void* _self;
-{
     METHOD(ItemProvider, select_parent);
+{
     return -1; /* no parent, ignore */
+    END_METHOD;
 }
 
     static int
@@ -805,8 +828,8 @@ _iprov_find_shortcut(_self, qchar_mb, startidx, index, unique)
     int startidx;
     int* index;
     int* unique;
-{
     METHOD(ItemProvider, find_shortcut);
+{
     int item_count, i, start, end, step, found, len;
     char_u *text, *p;
 
@@ -843,14 +866,16 @@ _iprov_find_shortcut(_self, qchar_mb, startidx, index, unique)
 	start = 0;
     }
     return found;
+    END_METHOD;
 }
 
     static void
 _iprov_update_result(_self, status)
     void*	    _self;
     dict_T*	    status;   /* the status of the popup list: selected item, marked items, etc. */
-{
     METHOD(ItemProvider, update_result);
+{
+    END_METHOD;
 }
 
     static char_u*
@@ -858,8 +883,8 @@ _iprov_handle_command(_self, puls, command)
     void*	    _self;
     PopupList_T*    puls;
     char_u*	    command;
-{
     METHOD(ItemProvider, handle_command);
+{
     typval_T rettv;
 
     vim_memset(&rettv, 0, sizeof(typval_T)); /* XXX: init_tv is not accessible */
@@ -872,6 +897,7 @@ _iprov_handle_command(_self, puls, command)
     clear_tv(&rettv);
 
     return NULL;
+    END_METHOD;
 }
 
     static void
@@ -879,8 +905,8 @@ _iprov__process_vim_cb_result(_self, puls, options)
     void*	    _self;
     PopupList_T*    puls;
     dict_T*	    options;
-{
     METHOD(ItemProvider, _process_vim_cb_result);
+{
     dictitem_T* option;
     if (! options)
 	return;
@@ -897,6 +923,7 @@ _iprov__process_vim_cb_result(_self, puls, options)
     option = dict_find(options, VSTR("title"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING)
 	self->op->set_title(self, option->di_tv.vval.v_string);
+    END_METHOD;
 }
 
     static int
@@ -905,8 +932,8 @@ _iprov_vim_cb_command(_self, puls, command, rettv)
     PopupList_T*    puls;
     char_u*	    command;
     typval_T*	    rettv;
-{
     METHOD(ItemProvider, vim_cb_command);
+{
     dictitem_T* icmd;
 
     if (!self->commands || !command)
@@ -944,22 +971,24 @@ _iprov_vim_cb_command(_self, puls, command, rettv)
     }
 
     return 1;
+    END_METHOD;
 }
 
     static void
 _iprov_default_keymap(_self, puls)
     void* _self;
     PopupList_T* puls;
-{
     METHOD(ItemProvider, default_keymap);
+{
+    END_METHOD;
 }
 
     static int
 _iprov_sort_items(_self, cmp)
     void* _self;
     ItemComparator_T* cmp;
-{
     METHOD(ItemProvider, sort_items);
+{
     int ni;
     ni = self->op->get_item_count(self);
     if (ni < 2)
@@ -967,6 +996,7 @@ _iprov_sort_items(_self, cmp)
 
     self->items->op->sort(self->items, cmp);
     return 1;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -1009,19 +1039,20 @@ _iprov_sort_items(_self, cmp)
     static void
 _vlprov_init(_self)
     void* _self;
-{
     METHOD(VimlistItemProvider, init);
+{
     self->vimlist = NULL;
     self->title_expr = NULL;
     self->_refcount = 0;
     self->skip_leading = 0;
+    END_METHOD;
 }
 
     static void
 _vlprov_destroy(_self)
     void* _self;
-{
     METHOD(VimlistItemProvider, destroy);
+{
     if (self->vimlist)
     { 
 	self->vimlist->lv_lock = self->_list_lock; /* restore the initial lock */
@@ -1038,8 +1069,8 @@ _vlprov_destroy(_self)
 _vlprov_read_options(_self, options)
     void* _self;
     dict_T* options;
-{
     METHOD(VimlistItemProvider, read_options);
+{
     dictitem_T* option;
     super(VimlistItemProvider, read_options)(self, options);
 
@@ -1052,13 +1083,14 @@ _vlprov_read_options(_self, options)
 	    _str_free(&self->title_expr);
 	self->op->update_titles(self);
     }
+    END_METHOD;
 }
 
     static void
 _vlprov_update_titles(_self)
     void* _self;
-{
     METHOD(VimlistItemProvider, update_titles);
+{
     PopupItem_T *ppit;
     int i, item_count;
 
@@ -1071,7 +1103,7 @@ _vlprov_update_titles(_self)
 	ppit = self->op->get_item(self, i);
 	if (ppit)
 	{
-	    // Check if it's a title. TODO: Use Vim regular expressions.
+	    /* Check if it's a title. TODO: Use Vim regular expressions. */
 	    if (STARTSWITH(ppit->text, self->title_expr))
 	    {
 		ppit->flags |= ITEM_TITLE;
@@ -1079,14 +1111,15 @@ _vlprov_update_titles(_self)
 	    }
 	}
     }
+    END_METHOD;
 }
 
     static PopupItem_T*
 _vlprov__cache_list_item(_self, pitem)
     void* _self;
     listitem_T* pitem;
-{
     METHOD(VimlistItemProvider, _cache_list_item);
+{
     char_u numbuf[NUMBUFLEN];
     PopupItem_T* pit = NULL;
     static char_u str_list[] = "<list>";
@@ -1123,6 +1156,7 @@ _vlprov__cache_list_item(_self, pitem)
     }
 
     return pit;
+    END_METHOD;
 }
 
 /* The current popuplist items are removed and replaced with the items from vimlist.
@@ -1130,8 +1164,8 @@ _vlprov__cache_list_item(_self, pitem)
     static void
 _vlprov_sync_items(_self)
     void* _self;
-{
     METHOD(VimlistItemProvider, sync_items);
+{
     list_T* vimlist = self->vimlist;
 
     /* clear the items but keep the allocated space */
@@ -1147,6 +1181,7 @@ _vlprov_sync_items(_self)
 
     /* free the unused space */
     self->items->op->truncate(self->items);
+    END_METHOD;
 }
 
 /*
@@ -1157,9 +1192,8 @@ _vlprov_sync_items(_self)
 _vlprov_set_list(_self, vimlist)
     void* _self;
     list_T* vimlist;
-{
     METHOD(VimlistItemProvider, set_list);
-
+{
     if (self->vimlist != vimlist)
     { 
 	if (self->vimlist)
@@ -1183,19 +1217,21 @@ _vlprov_set_list(_self, vimlist)
     self->op->sync_items(self);
     if (self->title_expr)
 	self->op->update_titles(self);
+    END_METHOD;
 }
 
     static void
 _vlprov_update_result(_self, status)
     void*	_self;
     dict_T*	status;
-{
     METHOD(VimlistItemProvider, update_result);
+{
     if (status && self->vimlist)
     {
 	dict_add_list(status, "items", self->vimlist);
 	self->vimlist->lv_lock |= VAR_LOCKED;
     }
+    END_METHOD;
 }
 
     static char_u*
@@ -1203,8 +1239,8 @@ _vlprov_handle_command(_self, puls, command)
     void*	    _self;
     PopupList_T*    puls;
     char_u*	    command;
-{
     METHOD(VimlistItemProvider, handle_command);
+{
     PopupItem_T* ppit;
     dictitem_T* option;
     listitem_T *pitem, *pcopy;
@@ -1295,14 +1331,15 @@ _vlprov_handle_command(_self, puls, command)
     /* TODO: apply filter to new items; this should be done by notifying the observers */
 
     return NULL;
+    END_METHOD;
 }
 
     static char_u*
 _vlprov_get_display_text(_self, item)
     void* _self;
     int item;
-{
     METHOD(VimlistItemProvider, get_display_text);
+{
     PopupItem_T* pit;
     char_u* text;
     pit = self->op->get_item(self, item);
@@ -1315,6 +1352,7 @@ _vlprov_get_display_text(_self, item)
 	if (self->skip_leading > 1 && *text) text++;
     }
     return text;
+    END_METHOD;
 }
 
 
@@ -1348,28 +1386,31 @@ _vlprov_get_display_text(_self, item)
     static void
 _box_init(_self)
     void* _self;
-{
     METHOD(Box, init);
+{
     self->left = 0;
     self->top = 0;
     self->width = 0;
     self->height = 0;
+    END_METHOD;
 }
 
     static int
 _box_right(_self)
     void* _self;
-{
     METHOD(Box, right);
+{
     return self->left + self->width - 1;
+    END_METHOD;
 }
 
     static int
 _box_bottom(_self)
     void* _self;
-{
     METHOD(Box, bottom);
+{
     return self->top + self->height - 1;
+    END_METHOD;
 }
 
     static void
@@ -1377,10 +1418,11 @@ _box_move(_self, x, y)
     void* _self;
     int x;
     int y;
-{
     METHOD(Box, move);
+{
     self->left = x;
     self->top = y;
+    END_METHOD;
 }
 
 #if 0
@@ -1389,10 +1431,11 @@ _box_resize(_self, width, height)
     void* _self;
     int width;
     int height;
-{
     METHOD(Box, resize);
+{
     self->width = width;
     self->height = height;
+    END_METHOD;
 }
 #endif
 
@@ -1418,21 +1461,22 @@ _box_resize(_self, width, height)
     static void
 _lned_init(_self)
     void* _self;
-{
     METHOD(LineEdit, init);
+{
     self->text = NULL;
     self->len = 0;
     self->size = 0;
     self->max_len = 0; /* unlimited */
     init_Box(&self->position);
     self->position.height = 1;
+    END_METHOD;
 }
 
     static void
 _lned_destroy(_self)
     void* _self;
-{
     METHOD(LineEdit, destroy);
+{
     _str_free(&self->text);
     END_DESTROY(LineEdit);
 }
@@ -1441,8 +1485,8 @@ _lned_destroy(_self)
 _lned_add_text(_self, ptext)
     void* _self;
     char_u* ptext;
-{
     METHOD(LineEdit, add_text);
+{
     int nlen = self->len + STRLEN(ptext);
 
     if (! ptext || ! *ptext)
@@ -1468,25 +1512,27 @@ _lned_add_text(_self, ptext)
     STRCAT(self->text, ptext);
     self->len = nlen;
     return 1;
+    END_METHOD;
 }
 
     static void
 _lned_set_text(_self, ptext)
     void* _self;
     char_u* ptext;
-{
     METHOD(LineEdit, set_text);
+{
     _str_free(&self->text);
     self->len = 0;
     self->size = 0;
     self->op->add_text(self, ptext);
+    END_METHOD;
 }
 
     static int
 _lned_backspace(_self)
     void* _self;
-{
     METHOD(LineEdit, backspace);
+{
     char_u* last_char;
     if (! self->text || STRLEN(self->text) < 1)
 	return 0;
@@ -1495,6 +1541,7 @@ _lned_backspace(_self)
     mb_ptr_back(self->text, last_char);
     *last_char = NUL;
     return 1;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -1526,19 +1573,20 @@ _lned_backspace(_self)
     static void
 _txm_init(_self)
     void* _self;
-{
     METHOD(TextMatcher, init);
+{
     self->mode_char = 'S'; /* simple */
     self->_needle = NULL;
     self->_need_strlen = 0;
     self->empty_score = 1;
+    END_METHOD;
 }
 
     static void
 _txm_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcher, destroy);
+{
     vim_free(self->_needle);
     END_DESTROY(TextMatcher);
 }
@@ -1547,9 +1595,8 @@ _txm_destroy(_self)
 _txm_set_search_str(_self, needle)
     void*    _self;
     char_u*  needle;
-{
     METHOD(TextMatcher, set_search_str);
-
+{
     if (self->_needle && needle && EQUALS(self->_needle, needle))
 	return;
 
@@ -1564,14 +1611,15 @@ _txm_set_search_str(_self, needle)
 	self->_needle = NULL;
 	self->_need_strlen = 0;
     }
+    END_METHOD;
 }
 
     static ulong
 _txm_match(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcher, match);
+{
     char_u *p, *needle;
     ulong score;
     int d;
@@ -1592,22 +1640,24 @@ _txm_match(_self, haystack)
     if (d == 0 || isalnum(*(p-1)) != isalnum(*p))
 	score += 30;
     return score;
+    END_METHOD;
 }
 
     static void
 _txm_init_highlight(_self, haystack)
     void*	_self;
     char_u*	haystack;
-{
     METHOD(TextMatcher, init_highlight);
+{
+    END_METHOD;
 }
 
     static int
 _txm_get_match_at(_self, haystack)
     void*	_self;
     char_u*	haystack;
-{
     METHOD(TextMatcher, get_match_at);
+{
     if (! haystack || ! self->_needle || ! *haystack || ! *self->_needle)
 	return 0;
 
@@ -1615,6 +1665,7 @@ _txm_get_match_at(_self, haystack)
 	return self->_need_strlen;
 
     return 0;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -1636,18 +1687,19 @@ _txm_get_match_at(_self, haystack)
     static void
 _txmrgxp_init(_self)
     void* _self;
-{
     METHOD(TextMatcherRegexp, init);
+{
     self->mode_char = 'R'; /* regexp */
     self->_regmatch.regprog = NULL;
     self->_regmatch.rm_ic = FALSE;
+    END_METHOD;
 }
 
     static void
 _txmrgxp_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcherRegexp, destroy);
+{
     vim_free(self->_regmatch.regprog);
     END_DESTROY(TextMatcherRegexp);
 }
@@ -1656,8 +1708,8 @@ _txmrgxp_destroy(_self)
 _txmrgxp_set_search_str(_self, needle)
     void* _self;
     char_u* needle;
-{
     METHOD(TextMatcherRegexp, set_search_str);
+{
     vim_free(self->_regmatch.regprog);
     self->_regmatch.regprog = NULL;
 
@@ -1671,28 +1723,30 @@ _txmrgxp_set_search_str(_self, needle)
     self->_regmatch.regprog = vim_regcomp(self->_needle, (p_magic ? RE_MAGIC : 0) | RE_STRING );
     --emsg_skip;
     self->_regmatch.rm_ic = p_ic;
+    END_METHOD;
 }
 
     static ulong
 _txmrgxp_match(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherRegexp, match);
+{
     if (! self->_regmatch.regprog)
 	return 1; /* no (valid) program => everything matches */
 
     self->found = vim_regexec(&self->_regmatch, haystack, 0);
 
     return self->found;
+    END_METHOD;
 }
 
     static void
 _txmrgxp_init_highlight(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherRegexp, init_highlight);
+{
     if (! self->_regmatch.regprog)
     {
 	self->found = FALSE;
@@ -1701,14 +1755,15 @@ _txmrgxp_init_highlight(_self, haystack)
 
     /* the first match is stored in _regmatch and used in get_match_at */
     self->found = vim_regexec(&self->_regmatch, haystack, 0);
+    END_METHOD;
 }
 
     static int
 _txmrgxp_get_match_at(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherRegexp, get_match_at);
+{
     if (!self->_regmatch.regprog || !self->found)
 	return 0;
 
@@ -1724,6 +1779,7 @@ _txmrgxp_get_match_at(_self, haystack)
 	return 0;
 
     return self->_regmatch.endp[0] - haystack;
+    END_METHOD;
 }
 
 
@@ -1766,22 +1822,24 @@ _txmrgxp_get_match_at(_self, haystack)
     static void
 _tmwmxpr_init(_self)
     void* _self;
-{
     METHOD(TmWordMatchExpr, init);
+{
     self->next = NULL;
     self->not_count = 0;
     self->yes_count = 0;
     self->not_words = NULL;
     self->yes_words = NULL;
+    END_METHOD;
 }
 
     static void
 _tmwmxpr_destroy(_self)
     void* _self;
-{
     METHOD(TmWordMatchExpr, destroy);
+{
     vim_free(self->not_words);
     vim_free(self->yes_words);
+    END_METHOD;
 }
 
     static void
@@ -1789,8 +1847,8 @@ _tmwmxpr_add_word_start(_self, _word, yesno)
     void* _self;
     char_u* _word;
     int yesno;
-{
     METHOD(TmWordMatchExpr, add_word_start);
+{
     if (yesno)
     {
 	if (! self->yes_words)
@@ -1811,13 +1869,14 @@ _tmwmxpr_add_word_start(_self, _word, yesno)
 	    ++self->not_count;
 	}
     }
+    END_METHOD;
 }
 
     static void
 _txmwrds_init(_self)
     void* _self;
-{
     METHOD(TextMatcherWords, init);
+{
     self->mode_char = 'W'; /* words */
     self->_str_words = NULL;
     self->expressions = NULL;
@@ -1825,33 +1884,36 @@ _txmwrds_init(_self)
     self->lst_expr->fn_destroy = &_tmwmxpr_destroy;
     self->lst_expr->first = (void**) &self->expressions;
     self->lst_expr->offs_next = offsetof(TmWordMatchExpr_T, next);
+    END_METHOD;
 }
 
     static void
 _txmwrds_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcherWords, destroy);
+{
     self->op->clear_words(self);
     CLASS_DELETE(self->lst_expr);
+    END_METHOD;
 }
 
     static void
 _txmwrds_clear_words(_self)
     void* _self;
-{
     METHOD(TextMatcherWords, clear_words);
+{
     self->lst_expr->op->delete_all(self->lst_expr, NULL /* no condition => all */);
     vim_free(self->_str_words);
     self->_str_words = NULL;
+    END_METHOD;
 }
 
     static void
 _txmwrds_set_search_str(_self, needle)
     void*    _self;
     char_u*  needle;
-{
     METHOD(TextMatcherWords, set_search_str);
+{
     int i, wordstart, notword;
     char_u* p;
     TmWordMatchExpr_T* pexpr;
@@ -1901,14 +1963,15 @@ _txmwrds_set_search_str(_self, needle)
 		_tmwmxpr_add_word_start(pexpr, p, !notword);
 	}
     }
+    END_METHOD;
 }
 
     static ulong
 _txmwrds_match(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherWords, match);
+{
     TmWordMatchExpr_T* pexpr;
     int i, notword, score, total_score, d;
     char_u* p;
@@ -1968,22 +2031,24 @@ _txmwrds_match(_self, haystack)
     }
 
     return 0;
+    END_METHOD;
 }
 
     static void
 _txmwrds_init_highlight(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherWords, init_highlight);
+{
+    END_METHOD;
 }
 
     static int
 _txmwrds_get_match_at(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherWords, get_match_at);
+{
     TmWordMatchExpr_T* pexpr;
     int i, n;
     if (! self->_str_words)
@@ -2006,6 +2071,7 @@ _txmwrds_get_match_at(_self, haystack)
     }
 
     return 0;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -2045,8 +2111,8 @@ _txmwrds_get_match_at(_self, haystack)
     static void
 _txmcmdt_init(_self)
     void* _self;
-{
     METHOD(TextMatcherCmdT, init);
+{
     self->mode_char = 'T'; /* command-t */
     self->last_retry_offset = -1;
     self->_need_len = 0;
@@ -2054,13 +2120,14 @@ _txmcmdt_init(_self)
     self->_need_char_lens = NULL;
     self->_hays_positions = NULL;
     self->_hays_best_positions = NULL;
+    END_METHOD;
 }
 
     static void
 _txmcmdt_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcherCmdT, destroy);
+{
     self->op->_clear(self);
     END_DESTROY(TextMatcherCmdT);
 }
@@ -2068,8 +2135,8 @@ _txmcmdt_destroy(_self)
     static void
 _txmcmdt__clear(_self)
     void* _self;
-{
     METHOD(TextMatcherCmdT, _clear);
+{
     self->_need_len = 0;
     vim_free(self->_need_chars);
     self->_need_chars = NULL;
@@ -2079,14 +2146,15 @@ _txmcmdt__clear(_self)
     self->_hays_positions = NULL;
     vim_free(self->_hays_best_positions);
     self->_hays_best_positions = NULL;
+    END_METHOD;
 }
 
     static void
 _txmcmdt_set_search_str(_self, needle)
     void*    _self;
     char_u*  needle;
-{
     METHOD(TextMatcherCmdT, set_search_str);
+{
     char_u *p, *pend;
     int l;
 
@@ -2114,6 +2182,7 @@ _txmcmdt_set_search_str(_self, needle)
     self->_need_len = l;
     self->_hays_positions = (char_u**) alloc(sizeof(char_u*) * self->_need_len);
     self->_hays_best_positions = (char_u**) alloc(sizeof(char_u*) * self->_need_len);
+    END_METHOD;
 }
 
     static ulong
@@ -2122,8 +2191,8 @@ _txmcmdt__calc_pos_score(_self, haystack, positions, npos)
     char_u*  haystack;
     char_u** positions;
     int	     npos;
-{
     METHOD(TextMatcherCmdT, _calc_pos_score);
+{
     ulong   score;
     int	    i, d;
     char_u  *p;
@@ -2157,6 +2226,7 @@ _txmcmdt__calc_pos_score(_self, haystack, positions, npos)
 
     }
     return score;
+    END_METHOD;
 }
 
     static char_u*
@@ -2181,8 +2251,8 @@ _rfind_char(text, ch)
 _txmcmdt_match(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(TextMatcherCmdT, match);
+{
     int		stack_pos;
     char_u	*first_pos, *last_pos, *last_retry_pos;
     char_u	*p;
@@ -2278,25 +2348,26 @@ _txmcmdt_match(_self, haystack)
     }
 
     return best_score;
+    END_METHOD;
 }
 
     static void
 _txmcmdt_init_highlight(_self, haystack)
     void*	_self;
     char_u*	haystack;
-{
     METHOD(TextMatcherCmdT, init_highlight);
-
+{
     /* find a match to set _hays_positions */
     self->op->match(self, haystack);
+    END_METHOD;
 }
 
     static int
 _txmcmdt_get_match_at(_self, haystack)
     void*	_self;
     char_u*	haystack;
-{
     METHOD(TextMatcherCmdT, get_match_at);
+{
     int i, len;
     char_u**	bestpos = self->_hays_best_positions;
     if (! bestpos || self->_need_len < 1
@@ -2317,6 +2388,7 @@ _txmcmdt_get_match_at(_self, haystack)
     /* TODO: increase len while _hays_positions[++i] points to next character */
 
     return len;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -2337,19 +2409,21 @@ _txmcmdt_get_match_at(_self, haystack)
     static void
 _tmfent_init(_self)
     void* _self;
-{
     METHOD(TextMatcherFactoryEntry, init);
+{
     self->next = NULL;
     self->name = NULL;
     self->fn_new = NULL;
+    END_METHOD;
 }
 
     static void
 _tmfent_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcherFactoryEntry, destroy);
+{
     vim_free(self->name);
+    END_METHOD;
 }
 
     static void
@@ -2357,11 +2431,12 @@ _tmfent_set(_self, name, fn_new)
     void* _self;
     char_u* name;
     NewObject_Fn fn_new;
-{
     METHOD(TextMatcherFactoryEntry, set);
+{
     vim_free(self->name);
     self->name = vim_strsave(name);
     self->fn_new = fn_new;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -2380,8 +2455,8 @@ _tmfent_set(_self, name, fn_new)
     static void
 _txmfac_init(_self)
     void* _self;
-{
     METHOD(TextMatcherFactory, init);
+{
     TextMatcherFactoryEntry_T *pme;
     self->_entries = NULL;
     self->_lst_entries = new_ListHelper();
@@ -2404,23 +2479,25 @@ _txmfac_init(_self)
     pme = new_TextMatcherFactoryEntry();
     pme->op->set(pme, VSTR("sparse"), (NewObject_Fn) &new_TextMatcherCmdT);
     self->_lst_entries->op->add_tail(self->_lst_entries, pme);
+    END_METHOD;
 }
 
     static void
 _txmfac_destroy(_self)
     void* _self;
-{
     METHOD(TextMatcherFactory, destroy);
+{
     self->_lst_entries->op->delete_all(self->_lst_entries, NULL);
     CLASS_DELETE(self->_lst_entries);
+    END_DESTROY(TextMatcherFactory);
 }
 
     static TextMatcher_T*
 _txmfac_create_matcher(_self, name)
     void* _self;
     char_u* name;
-{
     METHOD(TextMatcherFactory, create_matcher);
+{
     TextMatcherFactoryEntry_T *pme;
     if (!name)
 	return (TextMatcher_T*) new_TextMatcher();
@@ -2433,6 +2510,7 @@ _txmfac_create_matcher(_self, name)
 	return pme->fn_new();
 
     return NULL;
+    END_METHOD;
 }
 
 /* TODO: the current matchers are returned in state so that the caller can restore them on next call. */
@@ -2440,8 +2518,8 @@ _txmfac_create_matcher(_self, name)
 _txmfac_next_matcher(_self, name)
     void* _self;
     char_u* name;
-{
     METHOD(TextMatcherFactory, next_matcher);
+{
     TextMatcherFactoryEntry_T *pme;
     pme = self->_entries;
     if (!name && pme)
@@ -2449,7 +2527,7 @@ _txmfac_next_matcher(_self, name)
 
     while (pme && ! IEQUALS(pme->name, name))
 	pme = pme->next;
-    if (pme)
+    if (pme && pme->next)
 	pme = pme->next;
     else
 	pme = self->_entries;
@@ -2458,6 +2536,7 @@ _txmfac_next_matcher(_self, name)
 	return pme->name;
 
     return NULL;
+    END_METHOD;
 }
 
 
@@ -2480,18 +2559,19 @@ _txmfac_next_matcher(_self, name)
     static void
 _isrch_init(_self)
     void* _self;
-{
     METHOD(ISearch, init);
+{
     self->text[0] = NUL;
     self->start = 0;
     self->matcher = (TextMatcher_T*) new_TextMatcher();
+    END_METHOD;
 }
 
     static void
 _isrch_destroy(_self)
     void* _self;
-{
     METHOD(ISearch, destroy);
+{
     CLASS_DELETE(self->matcher);
     END_DESTROY(ISearch);
 }
@@ -2500,23 +2580,23 @@ _isrch_destroy(_self)
 _isrch_set_matcher(_self, pmatcher)
     void* _self;
     TextMatcher_T* pmatcher;
-{
     METHOD(ISearch, set_matcher);
+{
     if (pmatcher == self->matcher)
 	return;
     CLASS_DELETE(self->matcher);
     self->matcher = pmatcher;
     if (self->matcher)
 	self->matcher->op->set_search_str(self->matcher, self->text);
+    END_METHOD;
 }
 
     static void
 _isrch_set_text(_self, ptext)
     void* _self;
     char_u* ptext;
-{
     METHOD(ISearch, set_text);
-
+{
     if (! ptext)
 	*self->text = NUL;
     else
@@ -2526,17 +2606,19 @@ _isrch_set_text(_self, ptext)
     }
     if (self->matcher)
 	self->matcher->op->set_search_str(self->matcher, self->text);
+    END_METHOD;
 }
 
     static int
 _isrch_match(_self, haystack)
     void* _self;
     char_u* haystack;
-{
     METHOD(ISearch, match);
+{
     if (! self->matcher)
 	return 0;
     return self->matcher->op->match(self->matcher, haystack);
+    END_METHOD;
 }
 
 /* [ooc]
@@ -2595,9 +2677,10 @@ _isrch_match(_self, haystack)
     static void
 _flcmpscr_init(_self)
     void* _self;
-{
     METHOD(FltComparator_Score, init);
+{
     self->model = NULL;
+    END_METHOD;
 }
 
     static int
@@ -2605,9 +2688,9 @@ _flcmpscr_compare(_self, pia, pib)
     void* _self;
     void* pia;
     void* pib;
+    METHOD(FltComparator_Score, compare);
 {
     /* pia and pib are pointers to indices of items in the model */
-    METHOD(FltComparator_Score, compare);
     PopupItem_T *pa, *pb;
     if (!self->model)
 	return 0;
@@ -2629,14 +2712,16 @@ _flcmpscr_compare(_self, pia, pib)
     if (*(int*) pia > *(int*) pib) return 1;
 
     return 0;
+    END_METHOD;
 }
 
     static void
 _flcmpttsc_init(_self)
     void* _self;
-{
     METHOD(FltComparator_TitleScore, init);
+{
     self->model = NULL;
+    END_METHOD;
 }
 
     static int
@@ -2644,9 +2729,9 @@ _flcmpttsc_compare(_self, pia, pib)
     void* _self;
     void* pia;
     void* pib;
+    METHOD(FltComparator_TitleScore, compare);
 {
     /* pia and pib are pointers to indices of items in the model */
-    METHOD(FltComparator_TitleScore, compare);
     PopupItem_T *pa, *pb;
     if (!self->model)
 	return 0;
@@ -2674,25 +2759,27 @@ _flcmpttsc_compare(_self, pia, pib)
     if (*(int*) pia > *(int*) pib) return 1;
 
     return 0;
+    END_METHOD;
 }
 
     static void
 _iflt_init(_self)
     void* _self;
-{
     METHOD(ItemFilter, init);
+{
     self->model = NULL;
     self->text[0] = NUL;
     self->items = new_SegmentedGrowArrayP(sizeof(int), NULL);
     self->matcher = (TextMatcher_T*) new_TextMatcherWords();
     self->keep_titles = 1;
+    END_METHOD;
 }
 
     static void
 _iflt_destroy(_self)
     void* _self;
-{
     METHOD(ItemFilter, destroy);
+{
     self->model = NULL; /* filter doesn't own the model */
     CLASS_DELETE(self->items);
     CLASS_DELETE(self->matcher);
@@ -2703,23 +2790,23 @@ _iflt_destroy(_self)
 _iflt_set_matcher(_self, pmatcher)
     void* _self;
     TextMatcher_T* pmatcher;
-{
     METHOD(ItemFilter, set_matcher);
+{
     if (pmatcher == self->matcher)
 	return;
     CLASS_DELETE(self->matcher);
     self->matcher = pmatcher;
     if (self->matcher)
 	self->matcher->op->set_search_str(self->matcher, self->text);
+    END_METHOD;
 }
 
     static void
 _iflt_set_text(_self, ptext)
     void* _self;
     char_u* ptext;
-{
     METHOD(ItemFilter, set_text);
-
+{
     if (! ptext)
 	*self->text = NUL;
     else
@@ -2729,21 +2816,23 @@ _iflt_set_text(_self, ptext)
     }
     if (self->matcher)
 	self->matcher->op->set_search_str(self->matcher, self->text);
+    END_METHOD;
 }
 
     static int
 _iflt_is_active(_self)
     void* _self;
-{
     METHOD(ItemFilter, is_active);
+{
     return *self->text != NUL;
+    END_METHOD;
 }
 
     static void
 _iflt_filter_items(_self)
     void* _self;
-{
     METHOD(ItemFilter, filter_items);
+{
     ItemProvider_T *pmodel;
     PopupItem_T* pit;
     TextMatcher_T* matcher;
@@ -2880,25 +2969,27 @@ _iflt_filter_items(_self)
 	self->items->op->sort(self->items, (ItemComparator_T*)ptcmp);
 	CLASS_DELETE(ptcmp);
     }
+    END_METHOD;
 }
 
     static int
 _iflt_get_item_count(_self)
     void* _self;
-{
     METHOD(ItemFilter, get_item_count);
+{
     if (STRLEN(self->text) < 1)
 	return self->model->op->get_item_count(self->model);
 
     return self->items->len;
+    END_METHOD;
 }
 
     static int
 _iflt_get_model_index(_self, index)
     void* _self;
     int index;
-{
     METHOD(ItemFilter, get_model_index);
+{
     if (STRLEN(self->text) < 1)
 	return index;
 
@@ -2906,14 +2997,15 @@ _iflt_get_model_index(_self, index)
 	return -1;
 
     return *(int*) self->items->op->get_item(self->items, index);
+    END_METHOD;
 }
 
     static int
 _iflt_get_index_of(_self, model_index)
     void* _self;
     int model_index;
-{
     METHOD(ItemFilter, get_index_of);
+{
     int i, item_count;
     int *pmi;
     if (STRLEN(self->text) < 1)
@@ -2932,6 +3024,7 @@ _iflt_get_index_of(_self, model_index)
     }
 
     return -1;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -2944,7 +3037,7 @@ _iflt_get_index_of(_self, model_index)
     int	    screen_y;	// coordinate for screen[1]=='y'
 
     void    init();
-    void    destroy();
+    // void    destroy();
     void    set_limits(int left, int top, int right, int bottom);
     void    parse_screen_pos(char_u* posdef);
     void    set_align_params(dict_T* params);
@@ -2955,8 +3048,8 @@ _iflt_get_index_of(_self, model_index)
     static void
 _bxal_init(_self)
     void*   _self;
-{
     METHOD(BoxAligner, init);
+{
 
     init_Box(&self->limits);
     self->op->set_limits(self, 0, 0, Columns-1, Rows-1);
@@ -2966,14 +3059,7 @@ _bxal_init(_self)
     self->popup[1] = 's';
     self->screen[0] = '4';
     self->screen[1] = '4';
-}
-
-    static void
-_bxal_destroy(_self)
-    void*   _self;
-{
-    METHOD(BoxAligner, destroy);
-    END_DESTROY(BoxAligner);
+    END_METHOD;
 }
 
     static void
@@ -2983,20 +3069,21 @@ _bxal_set_limits(_self, left, top, right, bottom)
     int	    top;
     int	    right;
     int	    bottom;
-{
     METHOD(BoxAligner, set_limits);
+{
     self->limits.left = left;
     self->limits.top = top;
     self->limits.width = right-left+1;
     self->limits.height = bottom-top+1;
+    END_METHOD;
 }
 
     static void
 _bxal_parse_screen_pos(_self, posdef)
     void*	_self;
     char_u*	posdef;
-{
     METHOD(BoxAligner, parse_screen_pos);
+{
     int i;
     if (! posdef)
 	return;
@@ -3012,14 +3099,16 @@ _bxal_parse_screen_pos(_self, posdef)
 	    break;
 	++posdef;
     }
+    END_METHOD;
 }
 
     static void
 _bxal_set_align_params(_self, params)
     void*	_self;
     dict_T*	params;
-{
     METHOD(BoxAligner, set_align_params);
+{
+    END_METHOD;
 }
 
     static int
@@ -3039,8 +3128,8 @@ _bxal_align(_self, box, border)
     void*		_self;
     Box_T*		box;
     WindowBorder_T*	border;
-{
     METHOD(BoxAligner, align);
+{
     int px, py, sx, sy;
     Box_T* limits = &self->limits;
 
@@ -3078,6 +3167,7 @@ _bxal_align(_self, box, border)
 
 	LOG(("Box B: l=%d, t=%d, r=%d, b=%d", box->left, box->top, _box_right(box), _box_bottom(box)));
     }
+    END_METHOD;
 }
 
 /* [ooc]
@@ -3128,20 +3218,21 @@ _bxal_align(_self, box, border)
     static void
 _skmap_init(_self)
     void* _self;
-{
     METHOD(SimpleKeymap, init);
+{
     self->name = NULL;
     self->has_insert = 0;
     self->mode_char = NUL;
     self->key2cmd = dict_alloc();
     ++self->key2cmd->dv_refcount;
+    END_METHOD;
 }
 
     static void
 _skmap_destroy(_self)
     void* _self;
-{
     METHOD(SimpleKeymap, destroy);
+{
     _str_free(&self->name);
     if (self->key2cmd)
     {
@@ -3155,17 +3246,18 @@ _skmap_destroy(_self)
 _skmap_set_name(_self, name)
     void* _self;
     char_u* name;
-{
     METHOD(SimpleKeymap, set_name);
+{
     _str_assign(&self->name, name);
-};
+    END_METHOD;
+}
 
     static char_u*
 _skmap_encode_key(_self, sequence)
     void* _self;
     char_u* sequence;
-{
     METHOD(SimpleKeymap, encode_key);
+{
     char_u *seq, *raw;
 
     /* enclose in quotes to create a vim string */
@@ -3180,6 +3272,7 @@ _skmap_encode_key(_self, sequence)
     raw = eval_to_string_safe(seq, NULL, TRUE);
     vim_free(seq);
     return raw;
+    END_METHOD;
 }
 
     static void
@@ -3187,11 +3280,12 @@ _skmap_set_vim_key(_self, sequence, command)
     void* _self;
     char_u* sequence;
     char_u* command;
-{
     METHOD(SimpleKeymap, set_vim_key);
+{
     sequence = self->op->encode_key(self, sequence);
     self->op->set_key(self, sequence, command);
     vim_free(sequence);
+    END_METHOD;
 }
 
     static void
@@ -3199,8 +3293,8 @@ _skmap_set_key(_self, sequence, command)
     void* _self;
     char_u* sequence;
     char_u* command;
-{
     METHOD(SimpleKeymap, set_key);
+{
     dictitem_T* pi;
     if (!sequence || !command)
 	return;
@@ -3210,6 +3304,7 @@ _skmap_set_key(_self, sequence, command)
     if (pi)
 	dictitem_remove(self->key2cmd, pi);
     dict_add_nr_str(self->key2cmd, (char*)sequence, 0, command);
+    END_METHOD;
 }
 
     static char_u*
@@ -3217,8 +3312,8 @@ _skmap_get_command(_self, sequence, copy)
     void* _self;
     char_u* sequence;
     int copy;
-{
     METHOD(SimpleKeymap, get_command);
+{
     dictitem_T* seqmap;
     seqmap = dict_find(self->key2cmd, sequence, -1L);
     if (seqmap)
@@ -3230,16 +3325,17 @@ _skmap_get_command(_self, sequence, copy)
     }
 
     return NULL;
+    END_METHOD;
 }
 
     static int
 _skmap_find_key(_self, sequence)
     void* _self;
     char_u* sequence;
-{
     METHOD(SimpleKeymap, find_key);
+{
     dictitem_T* seqmap;
-    DictIterator_T itkeys;
+    DictIterator_T* pitkeys;
     int seq_len, match;
 
     match = 0; /* KM_NOTFOUND */
@@ -3255,8 +3351,8 @@ _skmap_find_key(_self, sequence)
     /* Test if sequence is a prefix of any of the items in the current modemap */
     seq_len = STRLEN(sequence);
 
-    init_DictIterator(&itkeys);
-    for(seqmap = itkeys.op->begin(&itkeys, self->key2cmd); seqmap != NULL; seqmap = itkeys.op->next(&itkeys))
+    pitkeys = new_DictIterator();
+    for(seqmap = pitkeys->op->begin(pitkeys, self->key2cmd); seqmap != NULL; seqmap = pitkeys->op->next(pitkeys))
     {
 	if (EQUALSN(seqmap->di_key, sequence, seq_len) && *(seqmap->di_key + seq_len) != NUL)
 	{
@@ -3268,15 +3364,17 @@ _skmap_find_key(_self, sequence)
 	    break;
 	}
     }
+    CLASS_DELETE(pitkeys);
 
     return match;
+    END_METHOD;
 }
 
     static void
 _skmap_clear_all_keys(_self)
     void* _self;
-{
     METHOD(SimpleKeymap, clear_all_keys);
+{
     if (! self->key2cmd)
 	return;
     if ((int)self->key2cmd->dv_hashtab.ht_used < 1)
@@ -3286,6 +3384,7 @@ _skmap_clear_all_keys(_self)
     dict_unref(self->key2cmd);
     self->key2cmd = dict_alloc();
     ++self->key2cmd->dv_refcount;
+    END_METHOD;
 }
 
 
@@ -3330,7 +3429,7 @@ _skmap_clear_all_keys(_self)
 
 */
 
-// t, tr, r, br, b, bl, l, tl
+/* t, tr, r, br, b, bl, l, tl */
 static int _frame_blank[]  = { ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ' };
 static int _frame_ascii[]  = { '-', '+', '|', '+', '-', '+', '|', '+' };
 #ifndef FEAT_MBYTE
@@ -3362,8 +3461,8 @@ static int* _frames[] = {
     static void
 _wbor_init(_self)
     void* _self;
-{
     METHOD(WindowBorder, init);
+{
     int i;
     int *pframe;
     for (i = 0; i < 4; i++)
@@ -3383,7 +3482,7 @@ _wbor_init(_self)
 
     self->border_attr = _puls_hl_attrs[PULSATTR_BORDER].attr;
 
-    // background, thumb
+    /* background, thumb */
     self->scrollbar_chars[SCROLLBAR_BAR]   = self->border_chars[WINBORDER_RIGHT*2]; 
     self->scrollbar_chars[SCROLLBAR_THUMB] = ' '; 
     if (self->scrollbar_chars[SCROLLBAR_BAR] == ' ')
@@ -3397,13 +3496,14 @@ _wbor_init(_self)
     self->mode = NULL;
     self->input_active = 0;
     self->line_edit = NULL;
+    END_METHOD;
 }
 
     static void
 _wbor_destroy(_self)
     void* _self;
-{
     METHOD(WindowBorder, destroy);
+{
     self->inner_box = NULL;	/* frame doesn't own the box */
     self->line_edit = NULL;	/* frame doesn't own the line_edit */
     _str_free(&self->title);
@@ -3416,17 +3516,18 @@ _wbor_destroy(_self)
 _wbor_set_title(_self, title)
     void* _self;
     char_u* title;
-{
     METHOD(WindowBorder, set_title);
+{
     _str_assign(&self->title, title);
+    END_METHOD;
 }
 
     static void
 _wbor_set_mode_text(_self, mode)
     void* _self;
     char_u* mode;
-{
     METHOD(WindowBorder, set_mode_text);
+{
     char_u buf[16]; /* XXX: small, but remove from stack, anyway */
     char_u *p;
     int i = 2;
@@ -3448,32 +3549,35 @@ _wbor_set_mode_text(_self, mode)
     *p = NUL;
 
     _str_assign(&self->mode, buf);
+    END_METHOD;
 }
 
     static void
 _wbor_set_input_active(_self, active)
     void* _self;
     int active;
-{
     METHOD(WindowBorder, set_input_active);
+{
     self->input_active = active;
+    END_METHOD;
 }
 
     static void
 _wbor_set_info(_self, text)
     void* _self;
     char_u* text;
-{
     METHOD(WindowBorder, set_info);
+{
     _str_assign(&self->info, text);
+    END_METHOD;
 }
 
     static void
 _wbor_prepare_scrollbar(_self, item_count)
     void* _self;
     int item_count;
-{
     METHOD(WindowBorder, prepare_scrollbar);
+{
     int h;
     self->item_count = item_count;
     if (! self->inner_box)
@@ -3487,6 +3591,7 @@ _wbor_prepare_scrollbar(_self, item_count)
     self->scrollbar_thumb = h * h / item_count;
     if (self->scrollbar_thumb < 1)
 	self->scrollbar_thumb = 1;
+    END_METHOD;
 }
 
     static int
@@ -3494,20 +3599,21 @@ _wbor_get_scrollbar_kind(_self, line, current)
     void* _self;
     int line;
     int current;
-{
     METHOD(WindowBorder, get_scrollbar_kind);
+{
     int sbtop = self->inner_box->height - self->scrollbar_thumb;
     sbtop = (int) ((float)sbtop * current / self->item_count + 0.5);
     if (line >= sbtop && line < sbtop + self->scrollbar_thumb)
 	return SCROLLBAR_THUMB;
     return SCROLLBAR_BAR;
+    END_METHOD;
 }
 
     static void
 _wbor_draw_top(_self)
     void* _self;
-{
     METHOD(WindowBorder, draw_top);
+{
     int row, col, right, ch;
     LineWriter_T* writer;
     if (! self->inner_box || !self->active[WINBORDER_TOP])
@@ -3532,13 +3638,14 @@ _wbor_draw_top(_self)
 	screen_putchar(self->border_chars[WINBORDER_TOP*2+1], row, right+1, self->border_attr);
 
     CLASS_DELETE(writer);
+    END_METHOD;
 }
 
     static void
 _wbor_draw_bottom(_self)
     void* _self;
-{
     METHOD(WindowBorder, draw_bottom);
+{
     int row, col, endcol, right, ch, chbot, attr, iw;
     char_u* input;
     LineWriter_T* writer;
@@ -3627,6 +3734,7 @@ _wbor_draw_bottom(_self)
     }
 
     CLASS_DELETE(writer);
+    END_METHOD;
 }
 
     static void
@@ -3634,8 +3742,8 @@ _wbor_draw_item_left(_self, line, current)
     void* _self;
     int line;
     int current;
-{
     METHOD(WindowBorder, draw_item_left);
+{
     int row, col;
     if (! self->inner_box)
 	return;
@@ -3655,6 +3763,7 @@ _wbor_draw_item_left(_self, line, current)
     }
 
     screen_putchar(self->border_chars[WINBORDER_RIGHT*2], row, col, self->border_attr);
+    END_METHOD;
 }
 
     static void
@@ -3662,8 +3771,8 @@ _wbor_draw_item_right(_self, line, current)
     void* _self;
     int line;
     int current;
-{
     METHOD(WindowBorder, draw_item_right);
+{
     int row, col;
     if (! self->inner_box)
 	return;
@@ -3683,6 +3792,7 @@ _wbor_draw_item_right(_self, line, current)
     }
 
     screen_putchar(self->border_chars[WINBORDER_RIGHT*2], row, col, self->border_attr);
+    END_METHOD;
 }
 
 /* [ooc]
@@ -3769,8 +3879,8 @@ _wbor_draw_item_right(_self, line, current)
     static void
 _puls_init(_self)
     void* _self;
-{
     METHOD(PopupList, init);
+{
     self->model = NULL;
     self->aligner = NULL;
     self->first = 0;
@@ -3816,13 +3926,14 @@ _puls_init(_self)
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
     self->hl_menu = new_ShortcutHighlighter();
     self->hl_menu->shortcut_attr = _puls_hl_attrs[PULSATTR_SHORTCUT].attr;
+    END_METHOD;
 }
 
     static void
 _puls_destroy(_self)
     void* _self;
-{
     METHOD(PopupList, destroy);
+{
     self->model = NULL;	    /* puls doesn't own the model */
     self->aligner = NULL;   /* puls doesn't own the aligner */
     self->hl_chain = NULL;  /* points to one of the highlighters */
@@ -3855,8 +3966,8 @@ _puls_destroy(_self)
 _puls_set_model(_self, model)
     void* _self;
     ItemProvider_T* model;
-{
     METHOD(PopupList, set_model);
+{
     self->model = model;
     if (self->filter)
 	self->filter->model = model;
@@ -3867,34 +3978,35 @@ _puls_set_model(_self, model)
 		self, &_puls_on_model_title_changed);
 	self->op->set_title(self, self->model->op->get_title(self->model));
     }
+    END_METHOD;
 }
 
     static int
 _puls_on_model_title_changed(_self, data)
     void* _self;
     void* data;
-{
     METHOD(PopupList, on_model_title_changed);
+{
     if (self->model)
 	self->op->set_title(self, self->model->op->get_title(self->model));
     return 1;
+    END_METHOD;
 }
 
     static void
 _puls_read_options(_self, options)
     void* _self;
     dict_T* options;
-{
     METHOD(PopupList, read_options);
+{
     dictitem_T *option, *di;
-    DictIterator_T itd;
 
     option = dict_find(options, VSTR("keymap"), -1L);
     if (option && option->di_tv.v_type == VAR_DICT)
     {
 	/* create the keymaps */
-	init_DictIterator(&itd);
-	for(di = itd.op->begin(&itd, option->di_tv.vval.v_dict); di != NULL; di = itd.op->next(&itd))
+	DictIterator_T* pitd = new_DictIterator();
+	for(di = pitd->op->begin(pitd, option->di_tv.vval.v_dict); di != NULL; di = pitd->op->next(pitd))
 	{
 	    if (di->di_tv.v_type != VAR_DICT)
 	    {
@@ -3903,6 +4015,7 @@ _puls_read_options(_self, options)
 	    }
 	    self->op->map_keys(self, di->di_key, di->di_tv.vval.v_dict);
 	}
+	CLASS_DELETE(pitd);
     }
 
     option = dict_find(options, VSTR("pos"), -1L);
@@ -3996,23 +4109,25 @@ _puls_read_options(_self, options)
     option = dict_find(options, VSTR("nextcmd"), -1L);
     if (option && option->di_tv.v_type == VAR_STRING && option->di_tv.vval.v_string)
 	self->cmds_macro->op->add(self->cmds_macro, option->di_tv.vval.v_string);
+    END_METHOD;
 }
 
     static void
 _puls_set_title(_self, title)
     void* _self;
     char_u* title;
-{
     METHOD(PopupList, set_title);
+{
     self->border->op->set_title(self->border, title);
+    END_METHOD;
 }
 
 
     static void
 _puls_default_keymap(_self)
     void* _self;
-{
     METHOD(PopupList, default_keymap);
+{
     SimpleKeymap_T* modemap;
     int i;
 
@@ -4107,6 +4222,7 @@ _puls_default_keymap(_self)
     modemap->op->set_vim_key(modemap, VSTR("<cr>"), VSTR("accept"));
     modemap->op->set_vim_key(modemap, VSTR("<esc>"), VSTR("quit"));
     modemap->op->set_vim_key(modemap, VSTR("<backspace>"), VSTR("select-parent"));
+    END_METHOD;
 }
 
     static void
@@ -4114,11 +4230,11 @@ _puls_map_keys(_self, kmap_name, kmap)
     void* _self;
     char_u* kmap_name;
     dict_T* kmap;
-{
     METHOD(PopupList, map_keys);
+{
     SimpleKeymap_T* modemap = NULL;
     dictitem_T* pkd;
-    DictIterator_T itkey;
+    DictIterator_T* pitkey;
 
     if (!kmap_name || !kmap)
 	return;
@@ -4133,22 +4249,24 @@ _puls_map_keys(_self, kmap_name, kmap)
     else
 	return; /* TODO: WARN - invalid keymap name! */
 
-    init_DictIterator(&itkey);
-    for (pkd = itkey.op->begin(&itkey, kmap); pkd != NULL; pkd = itkey.op->next(&itkey))
+    pitkey = new_DictIterator();
+    for (pkd = pitkey->op->begin(pitkey, kmap); pkd != NULL; pkd = pitkey->op->next(pitkey))
     {
 	if (pkd->di_tv.v_type == VAR_STRING)
 	{
 	    modemap->op->set_vim_key(modemap, pkd->di_key, pkd->di_tv.vval.v_string);
 	}
     }
+    CLASS_DELETE(pitkey);
+    END_METHOD;
 }
 
     static void
 _puls_prepare_result(_self, result)
     void* _self;
     dict_T* result;
-{
     METHOD(PopupList, prepare_result);
+{
     list_T*	marked;
     typval_T	tv;
     int		idx, item_count;
@@ -4175,6 +4293,7 @@ _puls_prepare_result(_self, result)
 
     if (self->model)
 	self->model->op->update_result(self->model, result);
+    END_METHOD;
 }
 
 /* Save various information about the state of the puls
@@ -4183,13 +4302,13 @@ _puls_prepare_result(_self, result)
 _puls_save_state(_self, result)
     void* _self;
     dict_T* result;
-{
     METHOD(PopupList, save_state);
-
+{
     dict_T  *d = dict_alloc();
     dict_add_nr_str(d, "isearch_matcher", 0, self->isearch_matcher_name);
     dict_add_nr_str(d, "filter_matcher", 0, self->filter_matcher_name);
     _dict_add_dict(result, "state", d);
+    END_METHOD;
 }
 
     static int
@@ -4197,6 +4316,7 @@ _puls_calc_size(_self, limit_width, limit_height)
     void*	_self;
     int		limit_width;
     int		limit_height;
+    METHOD(PopupList, calc_size);
 {
     int i;
     int w, max_width, max_width_1;
@@ -4204,8 +4324,6 @@ _puls_calc_size(_self, limit_width, limit_height)
     char_u *start;
     char_u *pos;
     int item_count;
-
-    METHOD(PopupList, calc_size);
 
     limit_width =  limit_value(limit_width, PULS_MIN_WIDTH, Columns-2);
     limit_height = limit_value(limit_height, 1, Rows-2);
@@ -4326,14 +4444,14 @@ _puls_calc_size(_self, limit_width, limit_height)
     }
 
     return self->position.width >= PULS_MIN_WIDTH && self->position.height >= PULS_MIN_HEIGHT;
+    END_METHOD;
 }
 
     static void
 _puls_reposition(_self)
     void*	_self;
-{
     METHOD(PopupList, reposition);
-
+{
     _box_move(&self->position, 1, 1);
     if (! self->aligner)
 	self->op->calc_size(self, Columns-1, Rows-1);
@@ -4342,39 +4460,44 @@ _puls_reposition(_self)
 	self->op->calc_size(self, self->aligner->limits.width, self->aligner->limits.height);
 	self->aligner->op->align(self->aligner, &self->position, self->border);
     }
+    END_METHOD;
 }
 
     static void
 _puls_update_hl_chain(_self)
     void *_self;
-{
     METHOD(PopupList, update_hl_chain);
-    ListHelper_T lst_chain;
-    init_ListHelper(&lst_chain);
-    lst_chain.first = (void**) &self->hl_chain; /* TODO?: lst_chain.set_list() */
-    lst_chain.offs_next = offsetof(Highlighter_T, next);
+{
+    ListHelper_T* plst_chain;
+    plst_chain  = new_ListHelper();
+    plst_chain->first = (void**) &self->hl_chain; /* TODO?: lst_chain.set_list() */
+    plst_chain->offs_next = offsetof(Highlighter_T, next);
 
     self->hl_chain = NULL;
 
     /* least important highlighter first */
     if (self->hl_user && self->hl_user->active)
-	lst_chain.op->add_tail(&lst_chain, self->hl_user);
+	plst_chain->op->add_tail(plst_chain, self->hl_user);
 
     if (self->hl_menu && self->hl_menu->active)
-	lst_chain.op->add_tail(&lst_chain, self->hl_menu);
+	plst_chain->op->add_tail(plst_chain, self->hl_menu);
 
     self->hl_filter->op->set_matcher(self->hl_filter, self->filter->matcher);
     self->hl_filter->match_attr = _puls_hl_attrs[PULSATTR_HL_FILTER].attr;
-    lst_chain.op->add_tail(&lst_chain, self->hl_filter);
+    plst_chain->op->add_tail(plst_chain, self->hl_filter);
 
     self->hl_isearch->op->set_matcher(self->hl_isearch, self->isearch->matcher);
     self->hl_isearch->match_attr = _puls_hl_attrs[PULSATTR_HL_SEARCH].attr;
-    lst_chain.op->add_tail(&lst_chain, self->hl_isearch);
+    plst_chain->op->add_tail(plst_chain, self->hl_isearch);
+
+    CLASS_DELETE(plst_chain);
+    END_METHOD;
 }
 
     static void
 _puls_redraw(_self)
     void *_self;
+    METHOD(PopupList, redraw);
 {
     int		thumb_heigth;
     int		thumb_pos;
@@ -4388,18 +4511,18 @@ _puls_redraw(_self)
     int		item_count;
     LineHighlightWriter_T* lhwriter;
     LineWriter_T* writer;
+    int		hidden, blank, scrollbar;
 
-    METHOD(PopupList, redraw);
 
     item_count = self->filter->op->get_item_count(self->filter);
 
-    int hidden = item_count - self->position.height;
-    int blank = 0;
+    hidden = item_count - self->position.height;
+    blank = 0;
     if ((self->first + self->position.height) > item_count)
 	/* we have empty lines after the last item */
 	blank = self->first + self->position.height - item_count;
     hidden += blank;
-    int scrollbar = hidden > 0;
+    scrollbar = hidden > 0;
     right = _box_right(&self->position);
     bottom = _box_bottom(&self->position);
     if (scrollbar)
@@ -4482,13 +4605,14 @@ _puls_redraw(_self)
     self->need_redraw = 0;
 
     CLASS_DELETE(writer);
+    END_METHOD;
 }
 
     static void
 _puls_move_cursor(_self)
     void* _self;
-{
     METHOD(PopupList, move_cursor);
+{
     int row, col;
     if (self->border->input_active && self->line_edit)
     {
@@ -4509,14 +4633,15 @@ _puls_move_cursor(_self)
 	col = self->position.left + self->position.width - 1;
     }
     windgoto(row, col);
+    END_METHOD;
 }
 
     static void
 _puls_set_current(_self, index)
     void* _self;
     int index;
-{
     METHOD(PopupList, set_current);
+{
     int item_count = self->filter->op->get_item_count(self->filter);
     if (index < 0)
 	index = 0;
@@ -4540,6 +4665,7 @@ _puls_set_current(_self, index)
 	    self->first = 0;
 	self->need_redraw |= PULS_REDRAW_ALL;
     }
+    END_METHOD;
 }
 
     static int
@@ -4547,8 +4673,8 @@ _puls_refilter(_self, track_item, always_track)
     void* _self;
     int track_item;
     int always_track;
-{
     METHOD(PopupList, refilter);
+{
     int item_count;
 
     item_count = self->filter->op->get_item_count(self->filter);
@@ -4565,14 +4691,15 @@ _puls_refilter(_self, track_item, always_track)
 	    track_item = 0;
     }
     return track_item;
+    END_METHOD;
 }
 
     static int
 _puls_on_filter_change(_self, data)
     void* _self;
     void* data;
-{
     METHOD(PopupList, on_filter_change);
+{
     int icur;
 
     icur = self->filter->op->get_model_index(self->filter, self->current);
@@ -4586,14 +4713,15 @@ _puls_on_filter_change(_self, data)
     /* TODO: if (autosize) pplist->need_redraw |= PULS_REDRAW_RESIZE; */
 
     return 1;
+    END_METHOD;
 }
 
     static int
 _puls_do_isearch(_self, dir)
     void* _self;
     int   dir;
-{
     METHOD(PopupList, do_isearch);
+{
     int item_count, start, end, step, i, idx_model;
     char_u* text;
     if (! self->filter || ! self->isearch)
@@ -4644,27 +4772,28 @@ _puls_do_isearch(_self, dir)
 	return 0;
     }
     return 1;
+    END_METHOD;
 }
 
     static int
 _puls_on_isearch_change(_self, data)
     void* _self;
     void* data;
-{
     METHOD(PopupList, on_isearch_change);
+{
     self->isearch->op->set_text(self->isearch, self->line_edit->text);
 
     self->op->do_isearch(self, 1);
     return 1;
+    END_METHOD;
 }
 
     static int
 _puls_do_command(_self, command)
     void* _self;
     char_u* command;
-{
     METHOD(PopupList, do_command);
-
+{
     int item_count = self->filter->op->get_item_count(self->filter);
     int idx_model_current = self->filter->op->get_model_index(self->filter, self->current);
 
@@ -4816,11 +4945,13 @@ _puls_do_command(_self, command)
     }
     else if (EQUALS(command, "isearch-next-matcher")) {
 	TextMatcher_T* matcher;
-	char_u* newname = self->isearch_matcher_factory->op->next_matcher(
-		self->isearch_matcher_factory, self->isearch_matcher_name);
+	char_u* newname;
+
+#define PFACT self->isearch_matcher_factory
+	newname = PFACT->op->next_matcher(PFACT, self->isearch_matcher_name);
 	_str_assign(&self->isearch_matcher_name, newname);
-	matcher = self->isearch_matcher_factory->op->create_matcher(
-		self->isearch_matcher_factory, self->isearch_matcher_name);
+	matcher = PFACT->op->create_matcher(PFACT, self->isearch_matcher_name);
+#undef PFACT
 	if (matcher)
 	{
 	    self->isearch->op->set_matcher(self->isearch, matcher); /* deletes the old matcher */
@@ -4831,11 +4962,13 @@ _puls_do_command(_self, command)
     }
     else if (EQUALS(command, "filter-next-matcher")) {
 	TextMatcher_T* matcher;
-	char_u* newname = self->filter_matcher_factory->op->next_matcher(
-		self->filter_matcher_factory, self->filter_matcher_name);
+	char_u* newname;
+
+#define PFACT self->filter_matcher_factory
+	newname = PFACT->op->next_matcher(PFACT, self->filter_matcher_name);
 	_str_assign(&self->filter_matcher_name, newname);
-	matcher = self->filter_matcher_factory->op->create_matcher(
-		self->filter_matcher_factory, self->filter_matcher_name);
+	matcher = PFACT->op->create_matcher(PFACT, self->filter_matcher_name);
+#undef PFACT
 	if (matcher)
 	{
 	    self->filter->op->set_matcher(self->filter, matcher); /* deletes the old matcher */
@@ -4858,8 +4991,8 @@ _puls_do_command(_self, command)
     {
 	if (self->model)
 	{
-	    LOG(("Select parent"));
 	    int rv = self->model->op->select_parent(self->model);
+	    LOG(("Select parent"));
 	    if (rv >= 0)
 	    {
 		/* reposition() has to be done before set_current */
@@ -4873,6 +5006,7 @@ _puls_do_command(_self, command)
     }
 
     return 0;
+    END_METHOD;
 }
 
 /*
@@ -4975,8 +5109,8 @@ _forced_redraw()
 _puls_switch_mode(_self, modename)
     void* _self;
     char_u* modename;
-{
     METHOD(PopupList, switch_mode);
+{
     SimpleKeymap_T* modemap;
     int has_input = 0;
 
@@ -5026,14 +5160,15 @@ _puls_switch_mode(_self, modename)
 	self->line_edit->max_len = MAX_FILTER_SIZE; /* TODO: use set_max_len() to trim the current value */
 	self->line_edit->op->set_text(self->line_edit, self->isearch->text);
     }
+    END_METHOD;
 }
 
     static int
 _puls_process_command(_self, command)
     void* _self;
     char_u* command;
-{
     METHOD(PopupList, process_command);
+{
     ItemProvider_T *pmodel;
     WindowBorder_T *pborder;
     pborder = self->border;
@@ -5116,6 +5251,7 @@ _puls_process_command(_self, command)
     }
 
     return PULS_LOOP_CONTINUE;
+    END_METHOD;
 }
 
 
@@ -5140,6 +5276,7 @@ _puls_test_loop(pplist, rettv)
     WindowBorder_T *pborder;
     ItemFilter_T   *pfilter;
     ISearch_T      *psearch;
+    dict_T  *dstate; 
 
     buf = (char_u*) alloc(BUF_LEN);
     sequence = (char_u*) alloc(MAX_SEQ_LEN);
@@ -5401,16 +5538,16 @@ _puls_test_loop(pplist, rettv)
     /* TODO: consider that there could be multiple overlapping boxes */
     _forced_redraw();
 
-    dict_T  *d = dict_alloc();
+    dstate = dict_alloc();
 
     rv = OK;
-    if (!d)
+    if (!dstate)
 	rv = FAIL;
     else
     {
-	rettv->vval.v_dict = d;
+	rettv->vval.v_dict = dstate;
 	rettv->v_type = VAR_DICT;
-	++d->dv_refcount;
+	++dstate->dv_refcount;
 
 	if (curcmds)
 	{
@@ -5423,19 +5560,19 @@ _puls_test_loop(pplist, rettv)
 	    LOG(("Terminated by 'sigint'"));
 	}
 
-	dict_add_nr_str(d, "status", 0, command);
+	dict_add_nr_str(dstate, "status", 0, command);
 	if (pplist->modemap)
-	    dict_add_nr_str(d, "mode", 0, pplist->modemap->name);
+	    dict_add_nr_str(dstate, "mode", 0, pplist->modemap->name);
 
 	if (EQUALS(command, "accept") || STARTSWITH(command, "accept:"))
 	{
-	    pplist->op->prepare_result(pplist, d);
-	    pplist->op->save_state(pplist, d);
+	    pplist->op->prepare_result(pplist, dstate);
+	    pplist->op->save_state(pplist, dstate);
 	}
 	else if (STARTSWITH(command, "done:"))
 	{
-	    dict_add_nr_str(d, "current", pplist->current, NULL);
-	    pplist->op->save_state(pplist, d);
+	    dict_add_nr_str(dstate, "current", pplist->current, NULL);
+	    pplist->op->save_state(pplist, dstate);
 	}
     }
 
@@ -5491,7 +5628,6 @@ puls_test(argvars, rettv)
     PopupList_T* pplist = NULL;
     ItemProvider_T* model = NULL;
     dictitem_T *option;
-    DictIterator_T itd;
     char_u* special_items = NULL;
     char_u* title = NULL;
     list_T* items = NULL;
@@ -5502,7 +5638,6 @@ puls_test(argvars, rettv)
 
     /*_init_vtables();*/
     _update_hl_attrs();
-    init_DictIterator(&itd);
 
     LOG(("---------- New listbox -----------"));
 
@@ -5542,8 +5677,8 @@ puls_test(argvars, rettv)
 #ifdef FEAT_POPUPLIST_BUFFERS
 	if (EQUALS(special_items, "buffers"))
 	{
-	    LOG(("Buffers"));
 	    BufferItemProvider_T* bmodel = new_BufferItemProvider();
+	    LOG(("Buffers"));
 	    bmodel->op->list_buffers(bmodel);
 	    model = (ItemProvider_T*) bmodel;
 	    default_split_columns = 1;
@@ -5552,8 +5687,8 @@ puls_test(argvars, rettv)
 #ifdef FEAT_POPUPLIST_MENUS
 	if (EQUALS(special_items, "menu") || EQUALS(special_items+1, "menu"))
 	{
-	    LOG(("Menu"));
 	    MenuItemProvider_T* mmodel = new_MenuItemProvider();
+	    LOG(("Menu"));
 	    if (!mmodel->op->parse_mode(mmodel, special_items))
 	    {
 		CLASS_DELETE(mmodel);
@@ -5570,6 +5705,7 @@ puls_test(argvars, rettv)
 #ifdef FEAT_QUICKFIX
 	if (EQUALS(special_items, "quickfix") || EQUALS(special_items, "copen"))
 	{
+	    QuickfixItemProvider_T* qmodel;
 	    LOG(("Quick Fix - %s", special_items));
 	    if (EQUALS(special_items, "copen"))
 	    {
@@ -5579,15 +5715,15 @@ puls_test(argvars, rettv)
 		    return FAIL;
 		}
 	    }
-	    QuickfixItemProvider_T* qmodel = new_QuickfixItemProvider();
+	    qmodel = new_QuickfixItemProvider();
 	    qmodel->qfinfo = &ql_info;
 	    default_current = qmodel->op->list_items(qmodel);
 	    model = (ItemProvider_T*) qmodel;
 	}
 	else if (EQUALS(special_items, "lopen"))
 	{
-	    LOG(("Quick Fix - lopen"));
 	    QuickfixItemProvider_T* qmodel = new_QuickfixItemProvider();
+	    LOG(("Quick Fix - lopen"));
 	    if (curwin->w_llist_ref)
 		qmodel->qfinfo = curwin->w_llist_ref;
 	    else if (curwin->w_llist)
@@ -5613,10 +5749,11 @@ puls_test(argvars, rettv)
 #if defined(INCLUDE_TESTS) || defined(DEBUG)
 	if (EQUALS(special_items, str_pulslog))
 	{
+	    VimlistItemProvider_T* vlmodel;
 	    LOG(("PULS LOG"));
 	    if (PULSLOG.lv_refcount < 1)
 		PULSLOG.lv_refcount = 1;
-	    VimlistItemProvider_T* vlmodel = new_VimlistItemProvider();
+	    vlmodel = new_VimlistItemProvider();
 	    vlmodel->op->set_list(vlmodel, &PULSLOG);
 	    model = (ItemProvider_T*) vlmodel;
 	}

@@ -38,7 +38,7 @@
     int	    min_col;	// start column
     int	    max_col;	// end column
     void    init();
-    void    destroy();
+    // void    destroy();
     void    add_fixed_tab(int col);
     int	    get_tab_size_at(int col);
     void    set_limits(int min_col, int max_col);
@@ -50,21 +50,14 @@
     static void
 _plwr_init(_self)
     void* _self;
-{
     METHOD(LineWriter, init);
+{
     self->fixed_tabs[0] = 0;
     self->tab_size = 8;
     self->min_col = 0;
     self->max_col = Columns-1;
     self->offset = 0;
-}
-
-    static void
-_plwr_destroy(_self)
-    void* _self;
-{
-    METHOD(LineWriter, destroy);
-    END_DESTROY(LineWriter);
+    END_METHOD;
 }
 
     static int
@@ -79,8 +72,8 @@ _int_compare (a, b)
 _plwr_add_fixed_tab(_self, col)
     void* _self;
     int col;
-{
     METHOD(LineWriter, add_fixed_tab);
+{
     int i = 0;
     while (i < PLWR_MAX_FIXED_TABS && self->fixed_tabs[i] > 0)
 	i++;
@@ -91,14 +84,15 @@ _plwr_add_fixed_tab(_self, col)
 	if (i > 0)
 	    qsort(self->fixed_tabs, i+1, sizeof(int), &_int_compare);
     }
+    END_METHOD;
 }
 
     static int
 _plwr_get_tab_size_at(_self, col)
     void* _self;
     int col;
-{
     METHOD(LineWriter, get_tab_size_at);
+{
     int i = 0;
     int last_tab = 0;
     if (self->fixed_tabs[0] > 0)
@@ -115,6 +109,7 @@ _plwr_get_tab_size_at(_self, col)
     if (self->tab_size == 0)
 	return 2;
     return self->tab_size - ((col - last_tab) % self->tab_size);
+    END_METHOD;
 }
 
     static void
@@ -122,10 +117,11 @@ _plwr_set_limits(_self, min_col, max_col)
     void* _self;
     int min_col;
     int max_col;
-{
     METHOD(LineWriter, set_limits);
+{
     self->min_col = min_col;
     self->max_col = max_col;
+    END_METHOD;
 }
 
 /*
@@ -149,8 +145,8 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     int row;
     int attr;
     int fillChar;
-{
     METHOD(LineWriter, write_line);
+{
     char_u *p, *s;
     int pwidth, max_pwidth, w, col, endcol;
 
@@ -215,6 +211,7 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     }
     if (col <= self->max_col && fillChar != NUL)
 	screen_fill(row, row + 1, col, self->max_col+1, fillChar, fillChar, attr);
+    END_METHOD;
 }
 
 /* [ooc]
@@ -231,7 +228,7 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     int	    text_width;	    // width of text processed
     char_u* match_end;	    // the attrubutes remain unchanged until match_end
     void    init();
-    void    destroy();
+    // void    destroy();
     void    bol_init(char_u* text, void* extra_data);
 
     // Intended use of match_end in calc_attr:
@@ -250,8 +247,8 @@ _plwr_write_line(_self, text, row, attr, fillChar)
     static void
 _hltr_init(_self)
     void* _self;
-{
     METHOD(Highlighter, init);
+{
     self->next = NULL;
     self->active = 1;
     self->state = 0; /* TODO: give names to the states */
@@ -259,14 +256,7 @@ _hltr_init(_self)
     self->text_attr = 0;
     self->text_width = -1; /* let the caller calculate it */
     self->match_end = NULL;
-}
-
-    static void
-_hltr_destroy(_self)
-    void* _self;
-{
-    METHOD(Highlighter, destroy);
-    END_DESTROY(Highlighter);
+    END_METHOD;
 }
 
     static void
@@ -274,21 +264,23 @@ _hltr_bol_init(_self, text, extra_data)
     void* _self;
     char_u* text;
     void* extra_data;
-{
     METHOD(Highlighter, bol_init);
+{
     self->state = 0;
     self->text_attr = self->default_attr;
     self->text_width = -1;
     self->match_end = NULL;
+    END_METHOD;
 }
 
     static int
 _hltr_calc_attr(_self, next_char)
     void* _self;
     char_u* next_char;
-{
     METHOD(Highlighter, calc_attr);
+{
     return 1;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -308,17 +300,18 @@ _hltr_calc_attr(_self, next_char)
     static void
 _hlshrt_init(_self)
     void* _self;
-{
     METHOD(ShortcutHighlighter, init);
+{
     self->shortcut_attr = self->default_attr;
+    END_METHOD;
 }
 
     static int
 _hlshrt_calc_attr(_self, next_char)
     void* _self;
     char_u* next_char;
-{
     METHOD(ShortcutHighlighter, calc_attr);
+{
     int rv = 0;
 
     /* states: 0 - normal, 1 - hl next char, 2 - un-hl this char */
@@ -350,6 +343,7 @@ _hlshrt_calc_attr(_self, next_char)
     }
 
     return rv;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -360,7 +354,7 @@ _hlshrt_calc_attr(_self, next_char)
     int	    match_attr;
     char_u* match_start;
     void    init();
-    void    destroy();
+    // void    destroy();
     void    set_matcher(TextMatcher* matcher);
     void    bol_init(char_u* text, void* extra_data);
     int	    calc_attr(char_u* next_char);
@@ -370,27 +364,21 @@ _hlshrt_calc_attr(_self, next_char)
     static void
 _hltxm_init(_self)
     void* _self;
-{
     METHOD(TextMatchHighlighter, init);
+{
     self->matcher = NULL;
     self->match_attr = _puls_hl_attrs[PULSATTR_SELECTED].attr;
-}
-
-    static void
-_hltxm_destroy(_self)
-    void* _self;
-{
-    METHOD(TextMatchHighlighter, destroy);
-    END_DESTROY(TextMatchHighlighter);
+    END_METHOD;
 }
 
     static void
 _hltxm_set_matcher(_self, matcher)
     void* _self;
     TextMatcher_T* matcher;
-{
     METHOD(TextMatchHighlighter, set_matcher);
+{
     self->matcher = matcher;
+    END_METHOD;
 }
 
     static void
@@ -398,8 +386,8 @@ _hltxm_bol_init(_self, text, extra_data)
     void* _self;
     char_u* text;
     void* extra_data;
-{
     METHOD(TextMatchHighlighter, bol_init);
+{
     super(TextMatchHighlighter, bol_init)(self, text, extra_data);
 
     /* Some matchers (eg. command-t) have to be initialized before they can be
@@ -409,14 +397,15 @@ _hltxm_bol_init(_self, text, extra_data)
      */
     if (self->matcher)
 	self->matcher->op->init_highlight(self->matcher, text);
+    END_METHOD;
 }
 
     static int
 _hltxm_calc_attr(_self, next_char)
     void* _self;
     char_u* next_char;
-{
     METHOD(TextMatchHighlighter, calc_attr);
+{
     int len;
     if (! self->matcher)
 	return 0;
@@ -437,6 +426,7 @@ _hltxm_calc_attr(_self, next_char)
 	self->match_end = next_char;
     }
     return 0;
+    END_METHOD;
 }
 
 /* [ooc]
@@ -464,18 +454,19 @@ _hltxm_calc_attr(_self, next_char)
     static void
 _plhlwr_init(_self)
     void* _self;
-{
     METHOD(LineHighlightWriter, init);
+{
     self->_tmpbuf = (char_u*) alloc(sizeof(char_u) * (Columns + 32));
     self->_tmplimit = self->_tmpbuf + Columns + 16;
     self->highlighters = NULL;
+    END_METHOD;
 }
 
     static void
 _plhlwr_destroy(_self)
     void* _self;
-{
     METHOD(LineHighlightWriter, destroy);
+{
     vim_free(self->_tmpbuf);
     self->_tmpbuf = NULL;
     self->_tmplimit = NULL;
@@ -490,8 +481,8 @@ _plhlwr__flush(_self, text_end, row, col, attr)
     int row;
     int col;
     int attr;
-{
     METHOD(LineHighlightWriter, _flush);
+{
     char_u  *st;
     *text_end = NUL;
     st = transstr(self->_tmpbuf);
@@ -502,6 +493,7 @@ _plhlwr__flush(_self, text_end, row, col, attr)
 	vim_free(st);
     }
     return col; /* number of columns written */
+    END_METHOD;
 }
 
     static void
@@ -511,8 +503,8 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
     int row;
     int init_attr;
     int fillChar;
-{
     METHOD(LineHighlightWriter, write_line);
+{
     char_u *p, *s;
     int pwidth, w, col, max_pwidth, attr, next_attr;
     Highlighter_T *phl;
@@ -645,5 +637,6 @@ _plhlwr_write_line(_self, text, row, init_attr, fillChar)
     }
     if (col <= self->max_col && fillChar != NUL)
 	screen_fill(row, row + 1, col, self->max_col+1, fillChar, fillChar, init_attr);
+    END_METHOD;
 }
 
