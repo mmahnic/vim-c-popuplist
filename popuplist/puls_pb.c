@@ -130,8 +130,11 @@ _bprov_list_buffers(_self)
 
     self->op->clear_items(self);
 
-    for (buf = firstbuf; buf != NULL && !got_int; buf = buf->b_next)
+    for (buf = firstbuf; buf != NULL; buf = buf->b_next)
     {
+	if (got_int)
+	    break;
+
 	/* skip unlisted buffers */
 	if (! self->show_unlisted && ! buf->b_p_bl)
 	    continue;
@@ -147,7 +150,7 @@ _bprov_list_buffers(_self)
 	    /* XXX: modify_fname, home_replace, shorten_fname, mch_dirname
 	     * ... can't figure out a good solution, so we split by '/'
 	     */
-	    home_replace(buf, buf->b_fname, NameBuff, MAXPATHL, TRUE);
+	    home_replace(buf, buf->b_ffname, NameBuff, MAXPATHL, TRUE);
 	    fname = vim_strrchr(NameBuff, '/');
 	    if (fname)
 	    {
@@ -172,8 +175,7 @@ _bprov_list_buffers(_self)
 		!buf->b_p_ma ? '-' : (buf->b_p_ro ? '=' : ' '),
 		(buf->b_flags & BF_READERR) ? 'x' :
 			(bufIsChanged(buf) ? '+' : ' '),
-		fname,
-		dirname);
+		fname, dirname);
 
 	pit = self->op->append_pchar_item(self, vim_strsave(IObuff), !ITEM_SHARED);
 	if (pit)
@@ -259,7 +261,7 @@ _bprov_sort_buffers(_self)
 {
     SegmentedGrowArray_T order;
     SegmentedArrayIterator_T itbufs, itorder;
-    ItemComparator_T* pcmp;
+    ItemComparator_T cmp;
     listitem_T* plit;
     ushort i;
     _pulspb_bufnr_order_T* pord;
@@ -267,29 +269,29 @@ _bprov_sort_buffers(_self)
     int rv;
 
     LOG(("BufferItemProvider sort_buffers"));
-    pcmp = new_ItemComparator();
+    init_ItemComparator(&cmp);
 
     switch (self->sorted_by)
     {
 	case BUFSORT_NR:
-	    pcmp->fn_compare = &_BufferItem_cmp_nr;
+	    cmp.fn_compare = &_BufferItem_cmp_nr;
 	    break;
 	case BUFSORT_PATH:
-	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    cmp.fn_compare = &_BufferItem_cmp_path;
 	    break;
 	case BUFSORT_NAME:
-	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    cmp.fn_compare = &_BufferItem_cmp_path;
 	    break;
 	case BUFSORT_EXT:
-	    pcmp->fn_compare = &_BufferItem_cmp_path;
+	    cmp.fn_compare = &_BufferItem_cmp_path;
 	    break;
 	case BUFSORT_MRU:
 	    LOG(("BufferItemProvider BUFSORT_MRU"));
 	    if (self->mru_list)
 	    {
 		/* 1. sort by bufnr */
-		pcmp->fn_compare = &_BufferItem_cmp_nr;
-		if (self->op->sort_items(self, pcmp))
+		cmp.fn_compare = &_BufferItem_cmp_nr;
+		if (self->op->sort_items(self, &cmp))
 		{
 		    /* 2. sort the MRU list by bufnr, but remember the MRU position */
 		    init_SegmentedGrowArray(&order);
@@ -307,8 +309,8 @@ _bprov_sort_buffers(_self)
 			}
 			plit = plit->li_next;
 		    }
-		    pcmp->fn_compare = &_PulsPb_MruOrderCmp_bufnr;
-		    order.op->sort(&order, pcmp);
+		    cmp.fn_compare = &_PulsPb_MruOrderCmp_bufnr;
+		    order.op->sort(&order, &cmp);
 
 		    /* 3. Assign mru_order to buffer items; use filter_score for that. */
 		    init_SegmentedArrayIterator(&itbufs);
@@ -339,20 +341,18 @@ _bprov_sort_buffers(_self)
 		    order.op->destroy(&order);
 
 		    /* 4. Sort buffers by filter_score (ie. MRU order) */
-		    pcmp->fn_compare = &_BufferItem_cmp_filter_score;
-		    return self->op->sort_items(self, pcmp);
+		    cmp.fn_compare = &_BufferItem_cmp_filter_score;
 		}
 	    }
 	    break;
 	default:
 	    /* unknown sort mode -> sort by number */
 	    self->sorted_by = BUFSORT_NR;
-	    pcmp->fn_compare = &_BufferItem_cmp_nr;
+	    cmp.fn_compare = &_BufferItem_cmp_nr;
 	    break;
     }
 
-    rv = pcmp->fn_compare ? self->op->sort_items(self, pcmp) : 0;
-    CLASS_DELETE(pcmp);
+    rv = cmp.fn_compare ? self->op->sort_items(self, &cmp) : 0;
     return rv;
     END_METHOD;
 }

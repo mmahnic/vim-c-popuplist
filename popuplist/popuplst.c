@@ -325,6 +325,10 @@ _update_hl_attrs()
  *  DONE: The items in the list can be marked.
  *	XXX: do we want to have marked items that are currently hidden by the filter?
  *
+ *  TODO: Add context items (flags ITEM_CONTEXT_BACK, ITEM_CONTEXT_FORWARD)
+ *	- handling of context items can be on, off or ignored (treated as normal items)
+ *	- when on, the context items are displayed only if the main item is displayed
+ *	- the number of displayed context items per normal item can be changed
  *  TODO: display and manage multiple listboxes
  *  TODO: attach a listbox to a Vim window (puls as a special buffer)
  *	- exit the puls main loop immediately but keep the listbox when another
@@ -472,11 +476,13 @@ _cmdque_pop(_self)
 
 /* [ooc]
  *
-  const ITEM_SHARED	= 0x01;
-  const ITEM_MARKED	= 0x02;
-  const ITEM_TITLE	= 0x04;
-  const ITEM_DISABLED	= 0x08;
-  const ITEM_SEPARATOR	= 0x10;
+  const ITEM_SHARED		= 0x01;
+  const ITEM_MARKED		= 0x02;
+  const ITEM_TITLE		= 0x04;
+  const ITEM_DISABLED		= 0x08;
+  const ITEM_SEPARATOR		= 0x10;
+  const ITEM_CONTEXT_FORWARD	= 0x20;
+  const ITEM_CONTEXT_BACK	= 0x40;
   struct PopupItem [ppit]
   {
     void*	data; // additional data for the item
@@ -4164,7 +4170,7 @@ _puls_default_keymap(_self)
     modemap->op->set_vim_key(modemap, VSTR("<cr>"), VSTR("accept"));
     modemap->op->set_vim_key(modemap, VSTR("<backspace>"), VSTR("select-parent"));
     modemap->op->set_vim_key(modemap, VSTR("<esc>"), VSTR("quit"));
-#ifdef DEBUG
+#if 0 && defined(DEBUG)
     /* This sequence is ambiguous in a terminal: '<a-d>' -> '<esc>d'.
      * :map <a-d> ... creates lhs='ä' instead of lhs='<esc>d';
      * a terminal (gnome, konsole) sends '<esc>d'; gui sends 'ä'.
@@ -5569,7 +5575,7 @@ _puls_test_loop(pplist, rettv)
 	    pplist->op->prepare_result(pplist, dstate);
 	    pplist->op->save_state(pplist, dstate);
 	}
-	else if (STARTSWITH(command, "done:"))
+	else if (EQUALS(command, cmd_quit) || STARTSWITH(command, "done:"))
 	{
 	    dict_add_nr_str(dstate, "current", pplist->current, NULL);
 	    pplist->op->save_state(pplist, dstate);
