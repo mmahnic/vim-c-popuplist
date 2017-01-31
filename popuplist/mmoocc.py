@@ -319,7 +319,7 @@ class CClass(object):
             params = ["%s* _%s" % (thistype, self.thisname)] + m.declaration_args
             params = [p.strip() for p in params if p.strip() != ""]
             params = ", ".join(params)
-            writer.writeln("static %s %s __ARGS((%s));" % (m.declaration_type, self.method_name(m.name), params))
+            writer.writeln("static %s %s (%s);" % (m.declaration_type, self.method_name(m.name), params))
 
     def get_vt_methods(self):
         methods = [] # list of [method, class]

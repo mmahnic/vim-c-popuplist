@@ -50,9 +50,10 @@ static dictitem_T dumdi;
 
 /* Required imports from eval.c */
 /* TODO: move to a header file */
-extern int call_func __ARGS((char_u *funcname, int len, typval_T *rettv, int argcount, typval_T *argvars, linenr_T firstline, linenr_T lastline, int *doesrange, int evaluate, dict_T *selfdict));
-extern void dict_unref __ARGS((dict_T *d));
-extern void dictitem_remove __ARGS((dict_T *dict, dictitem_T *item));
+extern int call_func(char_u *funcname, int len, typval_T *rettv, int argcount_in, typval_T *argvars_in, int (*argv_func)(int, typval_T *, int), linenr_T firstline, linenr_T lastline, int *doesrange, int evaluate, partial_T *partial, dict_T *selfdict_in);
+/* extern int call_func (char_u *funcname, int len, typval_T *rettv, int argcount, typval_T *argvars, linenr_T firstline, linenr_T lastline, int *doesrange, int evaluate, dict_T *selfdict); */
+extern void dict_unref (dict_T *d);
+extern void dictitem_remove (dict_T *dict, dictitem_T *item);
 
 /*
  * Add a dict entry to dictionary "d".
@@ -337,7 +338,7 @@ _update_hl_attrs()
  *	- add a pointer to the attached puls to the window structure
  *	- render the listbox on window update
  *	- ?? display the puls entry in :ls
- * 
+ *
  */
 
 /* [ooc]
@@ -970,8 +971,11 @@ _iprov_vim_cb_command(_self, puls, command, rettv)
 	++argc;
 
 	call_func(fn, (int)STRLEN(fn), rettv, argc, argv,
+		NULL /* TODO: some function (*argv_func)(int, typval_T *, int) */,
 		curwin->w_cursor.lnum, curwin->w_cursor.lnum,
-		&dummy, TRUE, selfdict);
+		&dummy, TRUE,
+		NULL /* TODO: partial_T *partial */,
+		selfdict);
 
 	dict_unref(status);
     }
@@ -1060,7 +1064,7 @@ _vlprov_destroy(_self)
     METHOD(VimlistItemProvider, destroy);
 {
     if (self->vimlist)
-    { 
+    {
 	self->vimlist->lv_lock = self->_list_lock; /* restore the initial lock */
 	if (self->_refcount > 0)
 	    list_unref(self->vimlist);
@@ -1201,7 +1205,7 @@ _vlprov_set_list(_self, vimlist)
     METHOD(VimlistItemProvider, set_list);
 {
     if (self->vimlist != vimlist)
-    { 
+    {
 	if (self->vimlist)
 	{
 	    self->vimlist->lv_lock = self->_list_lock;
@@ -1938,7 +1942,7 @@ _txmwrds_set_search_str(_self, needle)
 	if (*p == NUL)
 	    break;
 	if (isspace(*p))
-	{ 
+	{
 	    *p = NUL;
 	    wordstart = 1;
 	    continue;
@@ -1990,7 +1994,7 @@ _txmwrds_match(_self, haystack)
 	/* find any not_word */
 	notword = 0;
 	for (i = 0; i < pexpr->not_count; i++)
-	{ 
+	{
 	    if (! *pexpr->not_words[i]) /* empty word */
 		continue;
 	    p = _stristr(haystack, pexpr->not_words[i]);
@@ -2008,7 +2012,7 @@ _txmwrds_match(_self, haystack)
 	total_score = 0;
 	notword = 0;
 	for (i = 0; i < pexpr->yes_count; i++)
-	{ 
+	{
 	    p = pexpr->yes_words[i];
 	    if (! *p) /* empty word */
 		continue;
@@ -2066,7 +2070,7 @@ _txmwrds_get_match_at(_self, haystack)
     while(pexpr)
     {
 	for (i = 0; i < pexpr->yes_count; i++)
-	{ 
+	{
 	    if (! *pexpr->yes_words[i]) /* empty word */
 		continue;
 	    n = STRLEN(pexpr->yes_words[i]);
@@ -3422,7 +3426,7 @@ _skmap_clear_all_keys(_self)
     void init();
     void destroy();
     void set_title(char_u* title);
-    void set_mode_text(char_u* mode); 
+    void set_mode_text(char_u* mode);
     void set_input_active(int active);
     void set_info(char_u* text);
     void prepare_scrollbar(int item_count);
@@ -3489,8 +3493,8 @@ _wbor_init(_self)
     self->border_attr = _puls_hl_attrs[PULSATTR_BORDER].attr;
 
     /* background, thumb */
-    self->scrollbar_chars[SCROLLBAR_BAR]   = self->border_chars[WINBORDER_RIGHT*2]; 
-    self->scrollbar_chars[SCROLLBAR_THUMB] = ' '; 
+    self->scrollbar_chars[SCROLLBAR_BAR]   = self->border_chars[WINBORDER_RIGHT*2];
+    self->scrollbar_chars[SCROLLBAR_THUMB] = ' ';
     if (self->scrollbar_chars[SCROLLBAR_BAR] == ' ')
 	self->scrollbar_attr[SCROLLBAR_BAR] = _puls_hl_attrs[PULSATTR_SCROLL_SPACE].attr;
     else
@@ -3851,7 +3855,7 @@ _wbor_draw_item_right(_self, line, current)
     int col0_width;	    // width of column 0
     int col1_width;	    // width of column 1; only valid when column_split is TRUE
     int split_width;	    // the displayed width of column 0; less or eqal to col0_width
-    int need_redraw;	    // redraw is needed 
+    int need_redraw;	    // redraw is needed
 
     void    init();
     void    destroy();
@@ -4342,7 +4346,7 @@ _puls_calc_size(_self, limit_width, limit_height)
      */
 
     /* Compute the width of the widest item. */
-    if ( ! self->column_split) 
+    if ( ! self->column_split)
     {
 	for (i = 0; i < item_count; ++i)
 	{
@@ -4693,7 +4697,7 @@ _puls_refilter(_self, track_item, always_track)
     {
 	if (always_track || item_count <= self->filter->op->get_item_count(self->filter))
 	    track_item = self->filter->op->get_index_of(self->filter, track_item);
-	else 
+	else
 	    track_item = 0;
     }
     return track_item;
@@ -5282,7 +5286,7 @@ _puls_test_loop(pplist, rettv)
     WindowBorder_T *pborder;
     ItemFilter_T   *pfilter;
     ISearch_T      *psearch;
-    dict_T  *dstate; 
+    dict_T  *dstate;
 
     buf = (char_u*) alloc(BUF_LEN);
     sequence = (char_u*) alloc(MAX_SEQ_LEN);
@@ -5309,7 +5313,7 @@ _puls_test_loop(pplist, rettv)
     if (pplist->current > hh)
     {
 	de = pfilter->op->get_item_count(pfilter) - pplist->current;
-	if (de < hh) 
+	if (de < hh)
 	    hh = pplist->position.height - de;
 	pplist->first = pplist->current - hh;
 	if (pplist->first < 0)
@@ -5349,12 +5353,12 @@ _puls_test_loop(pplist, rettv)
 			ptm = pplist->isearch->matcher;
 		    if (ptm)
 			sprintf((char*)buf, "%c%c", ptm->mode_char, modemap->mode_char);
-		    else 
+		    else
 			sprintf((char*)buf, " %c", modemap->mode_char);
 		}
 		else if (modemap == pplist->km_shortcut)
 		    sprintf((char*)buf, "&&");
-		else 
+		else
 		    buf[0] = NUL;
 		pborder->op->set_mode_text(pborder, buf);
 	    }
@@ -5589,10 +5593,10 @@ _puls_test_loop(pplist, rettv)
 #include "puls_test.c"
 #endif
 
-/* 
+/*
  *    popuplist({items} [, {title} [, {options} ]])
  *
- *    Process the {items} in a popup window. {items} is a list or a string with 
+ *    Process the {items} in a popup window. {items} is a list or a string with
  *    the name of an internal list (eg. buffers). An optional window title
  *    can be set with {title} or with an entry in the {options} dictionary.
  *    The following entries are supported:
